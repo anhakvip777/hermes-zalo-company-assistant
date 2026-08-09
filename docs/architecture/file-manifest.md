@@ -11,6 +11,7 @@
 | `docs/architecture/file-manifest.md` | Sổ file và checkpoint |
 | `docs/operations/configuration.md` | Cấu hình, secret, allowlist, QR |
 | `docs/operations/acceptance-checklist.md` | Checklist nghiệm thu |
+| `docs/superpowers/specs/2026-08-10-hermes-zalo-admin-web-ui-design.md` | Thiết kế Admin Web UI nhúng trong Hermes Zalo plugin |
 | `bridge/config.js` | Đọc/validate bridge config |
 | `bridge/auth.js` | Bearer-token middleware |
 | `bridge/redaction.js` | Redact secret đệ quy |
