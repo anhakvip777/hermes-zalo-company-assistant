@@ -1,442 +1,596 @@
-# Hermes Zalo Company Assistant Design
+# Thiết kế trợ lý công ty Hermes trên Zalo
 
-Date: 2026-08-09
+Ngày: 2026-08-09
 
-Status: Approved in the design conversation; awaiting review of this written specification.
+Trạng thái: Thiết kế hội thoại đã được người dùng duyệt; bản đặc tả viết này đang chờ người dùng rà soát lần cuối.
 
-## 1. Summary
+## 1. Tóm tắt
 
-This project creates a private company fork of cuongdev/hermes-zalo-plugin at version 1.0.9. It keeps the proven Zalo login, reconnect, inbound listening, and outbound delivery paths built on RFS-ADRENO/zca-js 2.1.2, while replacing the broad Zalo automation surface with a narrowly scoped company-assistant gateway.
+Dự án tạo một fork nội bộ từ `cuongdev/hermes-zalo-plugin@1.0.9`, dùng `RFS-ADRENO/zca-js@2.1.2` để kết nối một tài khoản Zalo công ty với một Hermes Agent chạy liên tục trên VPS Linux.
 
-One company-owned Zalo account connects employees to one Hermes Agent running continuously on a Linux VPS. Employees are identified by Zalo ID. Direct messages are isolated per employee, approved company groups use group-scoped sessions, and all sessions share the company memory. Tool calls are controlled by a company policy hook. Read-only and ordinary work may execute immediately; externally visible or mutating work requires approval from a configured administrator.
+Công ty có năm người và các thành viên đều được tin cậy. Mọi Zalo ID trong allowlist được dùng toàn bộ tool thông thường của Hermes và toàn bộ chức năng vận hành của `zca-js` mà không cần quản trị viên duyệt từng thao tác. Quản trị viên có thêm quyền quản lý bot, thành viên, memory, cấu hình, QR, dịch vụ và lịch sử hội thoại.
 
-The fork remains a standalone Hermes plugin and does not modify Hermes core.
+Bot lưu toàn bộ chat riêng của thành viên và toàn bộ tin nhắn trong các group công ty, kể cả tin nhắn không mention bot. Mention chỉ quyết định bot có gọi Hermes và trả lời hay không; mention không quyết định việc lưu dữ liệu.
 
-## 2. Source Baselines
+Thiết kế ưu tiên sự đơn giản. Không có approval broker, mã duyệt, policy nhiều tầng hoặc audit ledger phức tạp.
 
-- Zalo plugin baseline: cuongdev/hermes-zalo-plugin tag v1.0.9, commit b30cf000e62a02f5da304d17556e28ddcb2d4ca2.
-- Zalo library baseline: RFS-ADRENO/zca-js tag v2.1.2, commit e6d6074feffb941db2c1e45fe0dc2f946952a0e3.
-- Hermes compatibility baseline: Hermes Agent v0.19.0 with platform plugins, pre_tool_call approval directives, gateway approval queues, and the optional send_exec_approval adapter surface. Later Hermes versions are supported only after the same compatibility suite passes.
-- Deployment target: Ubuntu 22.04 or 24.04, Node.js 22 LTS, Python 3.11, and systemd.
+## 2. Baseline
 
-## 3. Goals
+- Plugin Zalo: tag `v1.0.9`, commit `b30cf000e62a02f5da304d17556e28ddcb2d4ca2`.
+- Thư viện Zalo: `zca-js@2.1.2`.
+- Hermes Agent: `0.19.0`.
+- Môi trường triển khai: Ubuntu 22.04 hoặc 24.04, Node.js 22, Python 3.11 và systemd.
+- Mô hình: một công ty, một tài khoản Zalo, một Hermes Agent và một VPS.
 
-The first production-ready release must:
+## 3. Quyết định đã chốt
 
-1. Connect one company-owned personal Zalo account to one Hermes Agent.
-2. Accept direct messages only from configured employee Zalo IDs.
-3. Accept group messages only when both the group and sender are allowlisted and the assistant is mentioned.
-4. Keep every employee direct-message session separate.
-5. Keep each approved group in its own shared group session, isolated from all direct-message sessions.
-6. Allow all sessions to read a shared company memory.
-7. Let employees propose shared-memory changes, but apply them only after administrator approval.
-8. Allow ordinary tools to run immediately and require administrator approval for sensitive tools.
-9. Send approval requests privately to every administrator and accept the first valid decision.
-10. Preserve an auditable chain from requester through approval to outcome.
-11. Recover safely from Zalo disconnects, Hermes restarts, and VPS restarts without replaying tool side effects.
-12. Remove credential export, arbitrary API passthrough, and unrelated Zalo administration capabilities.
+1. Chỉ người có Zalo ID trong `allowed_users` được chat riêng với bot hoặc kích hoạt Hermes trong group.
+2. Mọi tin nhắn trong `allowed_groups` được lưu, không phụ thuộc sender có trong allowlist hay bot có được mention hay không.
+3. Trong group, bot chỉ gọi Hermes khi một thành viên trong allowlist mention bot.
+4. Chat riêng của mỗi thành viên có session và lịch sử riêng.
+5. Mỗi group có một session chung.
+6. Mọi thành viên trong allowlist dùng tool Hermes và chức năng Zalo ngay, không cần approval.
+7. Một tool Zalo đa năng cung cấp `list`, `describe` và `call` cho toàn bộ bề mặt `zca-js`.
+8. Admin có toàn bộ quyền của thành viên và thêm quyền quản trị bot.
+9. Mọi thành viên được đọc memory chung; chỉ admin được thêm, sửa hoặc xóa memory chung.
+10. Cookie, token, API key, mật khẩu và session context không được trả qua chat hoặc ghi vào log.
+11. Media không quá 20 MiB được tải và lưu; media lớn hơn chỉ lưu metadata và URL.
+12. Hội thoại được giữ lâu dài cho tới khi admin xuất hoặc xóa.
+13. Khi gọi Hermes, group nhận 100 tin nhắn gần nhất; lịch sử cũ được truy vấn bằng tool tìm kiếm.
 
-## 4. Non-goals
+## 4. Mục tiêu
 
-The first release will not:
+Phiên bản đầu phải:
 
-- Publish a public npm package.
-- Support multiple Zalo accounts or multiple companies.
-- Support Zalo Official Accounts.
-- Expose all zca-js APIs to Hermes.
-- Modify Hermes core.
-- Automatically learn shared memory from ordinary conversations.
-- Offer permanent or session-wide approval bypasses through Zalo.
-- Guarantee exactly-once behavior for third-party systems that provide no idempotency mechanism; instead, the plugin never automatically retries a tool whose external outcome is uncertain.
+- Cho năm thành viên trao đổi tự nhiên với Hermes như một thư ký công ty.
+- Cho thành viên dùng đọc/ghi file, terminal, email, hệ thống nội bộ và các tool Hermes khác ngay lập tức.
+- Cho thành viên dùng mọi chức năng Zalo như gửi tin, file, sticker, voice, reaction, undo, poll, friend, group, reminder và các method khác của `zca-js`.
+- Tách đúng lịch sử chat riêng và group.
+- Ghi lại hội thoại group ngay cả khi bot không được mention.
+- Cung cấp ngữ cảnh hội thoại gần và khả năng tìm lịch sử cũ cho Hermes.
+- Cho admin quản lý allowlist, admin list, memory, cấu hình, QR, dịch vụ, log và lịch sử.
+- Hoạt động lại sau khi bridge, Hermes hoặc VPS restart mà không ghi trùng tin nhắn.
 
-## 5. Architecture
+## 5. Ngoài phạm vi
 
-The solution has five bounded components.
+Phiên bản đầu không:
 
-### 5.1 Zalo Transport
+- Hỗ trợ nhiều công ty hoặc nhiều tài khoản Zalo.
+- Dùng Zalo Official Account API.
+- Xây approval broker hoặc yêu cầu mã duyệt cho từng hành động.
+- Xây quyền theo phòng ban hoặc theo từng method Zalo.
+- Cung cấp hệ thống audit chống sửa đổi dành cho tuân thủ pháp lý.
+- Cam kết tránh việc tài khoản bị Zalo giới hạn hoặc khóa.
 
-The Node.js transport owns only Zalo connectivity:
+## 6. Kiến trúc
 
-- QR login and credential recovery.
-- Cookie-first login after a successful QR login.
-- WebSocket listening and bounded reconnect.
-- Message normalization.
-- Text, typing, and attachment delivery.
-- Self-message filtering.
+Hệ thống có sáu thành phần nhỏ.
 
-It does not make authorization, session, memory, or Hermes tool-policy decisions.
+### 6.1 ZaloClient
 
-### 5.2 Hermes Zalo Adapter
+`ZaloClient` sở hữu kết nối `zca-js`:
 
-The Python platform adapter:
+- Đăng nhập bằng cookie hoặc QR.
+- Duy trì cookie, keepalive và reconnect.
+- Nhận message, reaction, undo, friend event và group event.
+- Chuẩn hóa event trước khi chuyển cho bridge.
+- Gửi hoặc thực hiện method Zalo.
 
-- Consumes normalized inbound events from the loopback bridge.
-- Converts events to Hermes MessageEvent values.
-- Selects the direct-message or group session.
-- Sends Hermes responses back through the bridge.
-- Implements the platform-specific approval prompt surface.
-- Intercepts administrator approval commands before they enter an agent session.
+Không thu gọn `zca-js` thành transport tối thiểu. Bề mặt chức năng đầy đủ được giữ lại để phục vụ nhóm người dùng tin cậy.
 
-### 5.3 Identity and Session Router
+### 6.2 Zalo bridge
 
-The router validates sender and thread identity before invoking Hermes.
+Node bridge:
 
-- Direct-message key: one stable session per employee Zalo ID.
-- Group key: one stable session per approved group ID.
-- Direct and group sessions never share conversation history.
-- All sessions use the same configured Hermes profile and shared memory.
-- Group messages are ignored unless the sender is allowlisted, the group is allowlisted, and the assistant is mentioned.
+- Chỉ bind `127.0.0.1`.
+- Yêu cầu token nội bộ cho mọi route.
+- Giữ các route chức năng hiện có và `POST /api/:method`.
+- Phát event cho Python adapter qua SSE.
+- Không quyết định role thành viên hoặc admin.
 
-### 5.4 Company Policy
+Bridge vẫn kiểm tra method tồn tại trước khi gọi và chuẩn hóa `ThreadType.User/Group`.
 
-The policy component receives the originating identity and session context for each Hermes tool call. It returns exactly one directive:
+### 6.3 Hermes Zalo adapter
 
-- allow: execute immediately.
-- approve: block until an administrator decides.
-- block: refuse the action and return a policy explanation.
+Python adapter:
 
-The policy is deterministic and config-driven. The model cannot grant itself additional privileges.
+- Xác định chat riêng hoặc group.
+- Lưu event hội thoại trước mention gate.
+- Kiểm tra allowlist khi quyết định gọi Hermes.
+- Tạo session source đúng cho DM hoặc group.
+- Gửi câu trả lời và media về Zalo.
+- Đăng ký tool `zalo`, `zalo_admin` và tool tìm kiếm lịch sử.
 
-### 5.5 Approval Broker and State Store
+### 6.4 Conversation Store
 
-The broker maps a one-time approval code to the original Hermes approval queue and session. It sends a redacted request to all administrator direct-message chats. The first valid decision is committed atomically and resolves the original blocked tool call.
+SQLite là nguồn dữ liệu chính cho hội thoại, attachment và hoạt động tool. Media được lưu trên filesystem, còn SQLite chỉ lưu metadata và đường dẫn.
 
-Durable state is kept in a plugin-owned SQLite database under the active HERMES_HOME. It stores approval metadata, message deduplication keys, delivery records, and audit events. Zalo credentials remain in a separate file and never enter the database or audit log.
+### 6.5 Hermes Agent
 
-## 6. End-to-end Data Flow
+Hermes giữ vai trò thư ký:
 
-### 6.1 Direct message
+- Hiểu yêu cầu bằng ngôn ngữ tự nhiên.
+- Dùng tool Hermes hoặc tool Zalo đa năng.
+- Đọc 100 tin nhắn gần nhất của session.
+- Tìm lịch sử cũ khi cần.
+- Dùng memory chung của công ty.
 
-1. zca-js receives a message and the transport assigns a normalized event ID.
-2. The adapter rejects self-messages and previously processed event IDs.
-3. The router checks the employee allowlist.
-4. An unauthorized sender is rejected before any model or tool call.
-5. An authorized sender is routed to that employee's direct-message session.
-6. Hermes answers or requests tools.
-7. Company Policy allows, approves, or blocks each tool request.
-8. The final response is delivered to the same direct-message chat.
+### 6.6 Admin Guard
 
-### 6.2 Group message
+Admin Guard là lớp quyền nhỏ, không phải approval system. Nó chỉ bảo vệ các thao tác quản trị bot:
 
-1. The router validates group ID, sender ID, and assistant mention.
-2. A failed check is ignored without invoking Hermes.
-3. A valid message enters the group-scoped session.
-4. Sensitive full outputs and generated files are sent privately to the requester; the group receives only a concise completion or failure status.
+- Sửa `allowed_users` hoặc `admin_users`.
+- Thay đổi memory chung.
+- Sửa cấu hình bot/Hermes hoặc secret.
+- Login QR, start, stop hoặc restart dịch vụ.
+- Xuất hoặc xóa lịch sử.
 
-### 6.3 Sensitive tool call
+Nếu requester không phải admin, thao tác bị từ chối ngay. Nếu là admin, thao tác chạy ngay, không cần xác nhận lần hai.
 
-1. Company Policy returns approve for the tool name and arguments.
-2. Hermes creates a blocking approval entry for the origin session.
-3. Approval Broker creates a six-character uppercase one-time code.
-4. Every administrator receives the same redacted approval request by direct message.
-5. An administrator replies Duyệt CODE or Từ chối CODE followed by an optional reason.
-6. The adapter verifies that the decision came from an administrator direct message.
-7. The state store atomically accepts the first valid decision.
-8. Approval Broker resolves the original Hermes session queue.
-9. The tool executes once when approved or returns a denial reason when rejected.
-10. The requester receives the outcome in the original chat.
+## 7. Định danh và quyền
 
-## 7. Identity and Channel Policy
+### 7.1 Thành viên
 
-Configuration defines three identity sets:
+Thành viên là Zalo ID nằm trong `allowed_users`.
 
-- allowed_users: employees who may invoke Hermes.
-- admin_users: users who may approve requests. Every administrator must also be in allowed_users.
-- allowed_groups: company groups in which the assistant may operate.
+Thành viên được:
 
-Startup fails closed when admin_users is empty, when an administrator is absent from allowed_users, or when the bridge token is missing.
+- Chat với Hermes trong DM.
+- Mention bot trong group được phép.
+- Dùng toàn bộ tool Hermes thông thường ngay lập tức.
+- Dùng `zalo list`, `zalo describe` và `zalo call` cho mọi method vận hành của `zca-js`.
+- Đọc memory chung và tìm lịch sử mà họ được phép xem.
 
-Unauthorized direct-message senders receive a fixed access-denied response with no internal IDs or policy details. Unauthorized group messages are ignored to avoid noisy public responses.
+Thành viên không được:
 
-Administrator commands are accepted only in direct messages. Group messages cannot approve, deny, change policy, or mutate memory directly.
+- Dùng `zalo_admin`.
+- Sửa allowlist, admin list, cấu hình bot hoặc service.
+- Thêm, sửa hoặc xóa memory chung.
+- Đọc chat riêng của thành viên khác.
+- Nhận secret qua chat.
 
-## 8. Session and Memory Policy
+### 7.2 Admin
 
-### 8.1 Sessions
+Admin là Zalo ID nằm trong cả `admin_users` và `allowed_users`.
 
-- Direct sessions are isolated by employee Zalo ID.
-- Approved groups share only the history visible in that group.
-- A group session cannot retrieve any direct-message conversation history.
-- A direct session cannot retrieve group chat history unless the shared company memory independently contains the same fact.
-- One agent turn runs at a time per session. Different sessions may run concurrently.
+Admin được toàn bộ quyền của thành viên và thêm:
 
-### 8.2 Shared memory reads
+- Quản lý thành viên và admin.
+- Quản lý memory chung.
+- Xem trạng thái, log đã redact và dung lượng lịch sử/media.
+- Export hoặc xóa lịch sử theo DM/group/khoảng thời gian.
+- Login lại QR và quản lý service.
+- Sửa cấu hình bot/Hermes.
 
-All authorized sessions may retrieve shared company memory. Retrieval does not grant write permission.
+Hệ thống không cho xóa admin cuối cùng để tránh mất quyền quản trị.
 
-### 8.3 Shared memory proposals
+### 7.3 Ranh giới secret
 
-An employee may propose add, update, or delete operations. The proposal must include:
+Các method hoặc kết quả dùng để xuất credential như `getCookie`, `getContext`, token, API key và mật khẩu không được trả về chat cho bất kỳ role nào. QR login và secret chỉ được xử lý trong admin flow đã redact hoặc trực tiếp trên VPS.
 
-- Proposer Zalo ID and display name.
-- Origin chat and session.
-- Operation type.
-- Existing content for updates or deletions.
-- Proposed content.
-- Human-readable reason.
+Đây là ranh giới cố định duy nhất ngoài Admin Guard.
 
-The proposal is routed through Approval Broker. No shared-memory mutation occurs before approval.
+## 8. Tool Zalo đa năng
 
-Attempts to mutate memory indirectly through file tools, terminal commands, execute-code tools, or internal system tools are classified as the same sensitive memory operation and require approval.
+Tool duy nhất dành cho thành viên có dạng:
 
-When approved, the audit record stores the proposer, approver, old value, new value, timestamps, and outcome. When denied or expired, memory is unchanged.
+```text
+zalo(action="list", query="group")
+zalo(action="describe", method="createPoll")
+zalo(action="call", method="createPoll", params={...})
+zalo(action="call", method="customMethod", args=[...])
+```
 
-Ordinary conversation content is never written to shared memory automatically.
+### 8.1 `list`
 
-## 9. Tool Policy
+- Liệt kê method theo nhóm hoặc từ khóa.
+- Trả tên, mô tả ngắn và mức hỗ trợ schema.
+- Không liệt kê method xuất credential như một capability có thể gọi qua chat.
 
-Tool policy uses tool name, structured arguments, originating role, and protected-resource rules.
+### 8.2 `describe`
 
-### 9.1 Immediate operations
+- Trả parameter, kiểu dữ liệu, mặc định và ví dụ.
+- Catalog được tạo và kiểm thử theo `zca-js@2.1.2`.
+- Hermes có thể gọi `describe` trước khi gọi một method ít dùng.
 
-These may run immediately when they are demonstrably read-only:
+### 8.3 `call`
 
-- Reading files inside configured company workspace roots.
-- Listing and searching files.
-- Reading shared memory.
-- Read-only database or internal-system queries explicitly marked read-only.
-- Web search, retrieval, summarization, analysis, and drafting.
-- Producing response text without external delivery.
+- `params` là object theo tên parameter khi catalog có schema.
+- `args` là positional array fallback để bảo đảm mọi method còn lại vẫn dùng được.
+- Method phải tồn tại trên live API object.
+- `user` và `group` được đổi thành enum `ThreadType` khi cần.
+- Kết quả được redact trước khi trả cho Hermes và người dùng.
+- Không có bước approval.
 
-### 9.2 Approval-required operations
+### 8.4 Tool admin
 
-These always require a one-time administrator decision:
+Tool `zalo_admin` có các action đầu tiên:
 
-- Sending email or messages to any external system.
-- Creating, editing, moving, or deleting files.
-- Uploading or sending a local file through Zalo.
-- Mutating databases or internal systems.
-- Changing access, credentials, permissions, services, deployments, or scheduled jobs.
-- Financial, purchasing, HR, or account-management actions.
-- Adding, updating, or deleting shared memory.
-- Terminal or execute-code operations that Hermes security guards identify as mutating or dangerous.
-- Any plugin or MCP tool configured as mutating.
+```text
+status
+add_user
+remove_user
+add_admin
+remove_admin
+memory_add
+memory_update
+memory_delete
+history_export
+history_delete
+login_qr
+restart
+stop
+start
+show_logs
+```
 
-### 9.3 Hard-blocked operations
+Mỗi action kiểm tra `requester_id` thuộc `admin_users` trước khi thực hiện.
 
-These cannot be approved through Zalo:
+## 9. Lưu hội thoại
 
-- Exporting Zalo cookies, context, tokens, API keys, or passwords.
-- Disabling allowlists, approval policy, audit, or bridge authentication.
-- Enabling Hermes yolo mode or permanent/session-wide approval from Zalo.
-- Calling arbitrary zca-js methods.
-- Modifying the policy database or approval records outside the broker.
+### 9.1 Group
 
-### 9.4 Administrator-originated sensitive work
+Với mọi group trong `allowed_groups`:
 
-Administrator requests are subject to the same two-step confirmation. A requesting administrator may approve their own request, but the request still gets a code and a complete audit trail.
+1. Nhận event từ Zalo.
+2. Chống trùng bằng khóa event/message ổn định.
+3. Lưu event vào Conversation Store.
+4. Nếu là message có attachment, xử lý attachment theo giới hạn media.
+5. Sau khi lưu thành công mới kiểm tra mention.
+6. Không mention: kết thúc, bot im lặng.
+7. Có mention từ sender trong `allowed_users`: gọi Hermes bằng session group.
+8. Có mention từ sender ngoài allowlist: vẫn lưu nhưng không gọi Hermes.
 
-## 10. Approval Protocol
+Tin nhắn của mọi thành viên trong group được lưu, không chỉ năm người trong allowlist.
 
-- Code format: six uppercase base32 characters excluding visually ambiguous characters.
-- Lifetime: 300 seconds from creation.
-- Scope: exactly one tool call or one memory mutation.
-- Delivery: private message to every configured administrator.
-- Decision rule: first valid atomic decision wins.
-- Allowed decisions: Duyệt CODE and Từ chối CODE with an optional reason.
-- No group decisions, no non-admin decisions, no reused codes, and no permanent approval mode.
-- Invalid decision attempts are rate-limited and audited.
-- A decision after resolution receives an already-processed response.
-- Timeout is a denial.
-- Process restart is a denial for every still-pending approval.
-- Raw secrets are redacted before the approval message is built.
+### 9.2 Chat riêng
 
-An approval message includes requester, origin, tool or memory operation, redacted target and arguments, expected effect, creation time, expiry time, and code.
+- Chỉ DM của sender trong `allowed_users` được lưu vào lịch sử thành viên và gọi Hermes.
+- Mỗi sender có một session DM riêng.
+- Tin nhắn và câu trả lời của bot đều được lưu.
+- Người ngoài allowlist nhận thông báo không có quyền với tần suất giới hạn, sau đó bot im lặng.
 
-## 11. Bridge API Surface
+### 9.3 Event được lưu
 
-The bridge binds only to 127.0.0.1 and requires a strong shared token on every route, including health probes.
+Conversation Store ghi:
 
-Allowed routes are restricted to:
+- Text message.
+- Reply và quote metadata.
+- Mention metadata.
+- Attachment metadata.
+- Reaction và undo liên quan tới message.
+- Bot outbound message.
+- Timestamp và sender identity.
 
-- Health and connection state.
-- Authenticated Server-Sent Events for normalized inbound events.
-- Send text.
-- Send typing state.
-- Send an attachment supplied as authenticated multipart content.
-- QR relogin and QR retrieval from localhost.
+Typing event không cần lưu lâu dài.
 
-The fork removes:
+## 10. Media
 
-- Generic method passthrough.
-- Cookie or context export.
-- Friend request management.
-- Group creation, membership, deputy, rename, leave, and poll management.
-- Contact enumeration not required by setup.
-- Remote shutdown.
-- Arbitrary local filesystem path uploads.
+Với mỗi ảnh, file, voice hoặc video:
 
-The Python adapter reads an approved file and uploads its bytes over the authenticated loopback connection. The Node process never accepts a caller-provided local path.
+- Kích thước không quá 20 MiB: tải và lưu cục bộ.
+- Kích thước lớn hơn 20 MiB: chỉ lưu tên, loại, MIME, kích thước và URL.
+- Không biết trước kích thước: stream và dừng khi vượt 20 MiB.
+- Download lỗi: vẫn lưu message và metadata với trạng thái `failed`.
+- Chống tải trùng bằng message ID và attachment index.
+- Filename được làm sạch trước khi ghi.
 
-## 12. Configuration and Secrets
+Thư mục mặc định:
 
-Behavioral settings live in the active Hermes config.yaml, not environment variables. They include identity sets, group mode, tool classification overrides, workspace roots, rate limits, concurrency, and approval timeout.
+```text
+<HERMES_HOME>/zalo-company/history/media/<thread-type>/<thread-id>/<YYYY-MM-DD>/
+```
 
-Secrets live in the active Hermes .env or a systemd credential file. They include the bridge token and third-party credentials. Zalo session credentials are stored under a plugin-owned state directory with directory mode 0700 and file mode 0600.
+Admin có thể xem dung lượng, export hoặc xóa media cùng lịch sử liên quan.
 
-Default runtime limits are:
+## 11. Session và ngữ cảnh Hermes
 
-- 10 accepted inbound messages per employee per minute.
-- 60 accepted inbound messages globally per minute.
-- 4 concurrently running Hermes sessions.
-- 5 queued inbound messages per session.
-- 300-second approval timeout.
-- 3 outbound Zalo delivery attempts with bounded backoff.
+### 11.1 Session key
 
-The setup command may import old version-1.0.9 behavioral environment values once and write their equivalent config.yaml section. Runtime behavior then comes only from config.yaml. Secrets remain outside config.yaml.
+- DM: một session cho mỗi Zalo ID thành viên.
+- Group: một session chung cho mỗi group ID.
+- DM và group không dùng chung conversation history.
 
-## 13. Reliability and Failure Behavior
+### 11.2 Context gần
 
-### 13.1 Zalo disconnect
+Khi gọi Hermes, adapter cung cấp tối đa 100 message gần nhất của session theo thứ tự thời gian. Context gồm text, sender, timestamp, reply, mention và attachment summary; không nhúng toàn bộ binary media.
 
-The transport reconnects with bounded exponential backoff. A permanently dead or expired session stops command processing and sends a private alert to administrators. QR login must be completed locally on the VPS or through an authenticated SSH tunnel.
+### 11.3 Tìm lịch sử cũ
 
-### 13.2 Hermes unavailable
+Tool `zalo_history` hỗ trợ:
 
-The adapter returns a fixed maintenance response. It does not queue work that could execute unexpectedly after recovery.
+```text
+search
+recent
+get_message
+get_attachment
+```
 
-### 13.3 Duplicate events
+Thành viên chỉ được tìm:
 
-Inbound event IDs are persisted before agent dispatch. A duplicate cannot create a second agent turn. Self-sent messages are always filtered.
+- DM của chính mình.
+- Group nằm trong `allowed_groups`.
 
-### 13.4 Delivery failure
+Admin được tìm hoặc export mọi conversation của công ty.
 
-Zalo response delivery may retry up to three times. Tool execution is never retried as a consequence of a delivery failure.
+## 12. Memory chung
 
-### 13.5 Approval interruption
+- Mọi thành viên được đọc memory chung.
+- Chỉ admin được gọi action memory ghi, sửa hoặc xóa.
+- Hội thoại không tự động được ghi vào memory.
+- Admin có thể yêu cầu Hermes đọc lịch sử rồi chủ động lưu một kết luận vào memory.
+- Memory write chạy ngay sau khi role check, không có approval code.
 
-Timeout, service restart, missing administrator routing, or broker failure all deny the operation. Pending work is never resumed automatically after restart.
+Admin Guard phải áp dụng cả khi người dùng cố sửa memory bằng `write_file`, `patch`, terminal hoặc execute-code, không chỉ qua tool `memory`.
 
-### 13.6 Concurrency
+## 13. Mô hình dữ liệu
 
-The gateway serializes turns per session and permits bounded concurrency across sessions. Approval decisions use a database transaction so simultaneous administrator responses cannot both win.
+SQLite có năm bảng chính.
 
-## 14. Audit
+### 13.1 `conversations`
 
-Every accepted inbound message and every tool-policy decision gets a correlation ID. Audit records include:
+- `id`
+- `thread_type`: `dm` hoặc `group`
+- `thread_id`
+- `title`
+- `created_at`
+- `last_message_at`
+- Unique theo `thread_type + thread_id`.
 
-- Requester identity and role.
-- Origin platform, chat type, chat ID, and session key.
-- Tool name or memory operation.
-- Redacted arguments and expected effect.
-- Policy directive.
-- Approval code hash, approver, decision, and optional reason.
-- Start, decision, completion, and delivery timestamps.
-- Final status and redacted error.
+### 13.2 `messages`
 
-The audit log never stores Zalo cookies, bridge tokens, API keys, passwords, or raw secret-bearing command strings. Audit records are append-only through the plugin interface. This is an application-level audit trail, not a tamper-proof ledger against a VPS administrator with filesystem access.
+- `id`
+- `conversation_id`
+- `provider_message_id`
+- `provider_cli_message_id`
+- `sender_id`
+- `sender_name`
+- `text`
+- `is_bot`
+- `mentioned_bot`
+- `reply_to_message_id`
+- `sent_at`
+- `stored_at`
+- `recalled_at`
+- `extra_json` cho normalized metadata không nhạy cảm.
 
-## 15. Deployment
+Message có unique dedupe key theo account, thread và provider IDs.
 
-The Linux VPS runs two systemd units:
+### 13.3 `message_events`
 
-1. hermes-zalo-company-bridge.service for the Node.js transport.
-2. hermes-gateway.service for Hermes with the company Zalo platform enabled.
+- Reaction, undo và các event liên quan message.
+- Giữ event type, actor, timestamp và normalized payload.
 
-The bridge service starts first. Hermes depends on bridge health. Both services use a dedicated unprivileged Unix account, restricted filesystem access, restart-on-failure, and journal redaction.
+### 13.4 `attachments`
 
-Installation order:
+- Liên kết tới message.
+- Index trong message.
+- Kind, filename, MIME, kích thước, URL.
+- Local path, SHA-256 và trạng thái download.
 
-1. Install Node.js 22, Python 3.11, and Hermes v0.19.0 or newer.
-2. Install fork dependencies from the lockfile.
-3. Install and enable the standalone Hermes platform plugin.
-4. Create config and secret files with restricted permissions.
-5. Run QR login.
-6. Run configuration validation and security smoke checks.
-7. Start both services manually and run acceptance tests.
-8. Enable systemd autostart only after acceptance passes.
+### 13.5 `tool_activity`
 
-## 16. Testing Strategy
+Log nhẹ gồm:
 
-### 16.1 Node unit tests
+- Thời gian.
+- Requester Zalo ID.
+- DM/group origin.
+- Tool name hoặc Zalo method.
+- Trạng thái thành công/thất bại/chưa xác định.
+- Lỗi đã redact.
 
-- Login state and credential permissions.
-- Normalization for direct messages, groups, mentions, attachments, and self-messages.
-- Reconnect scheduling.
-- Inbound and outbound deduplication behavior.
-- Required bridge authentication.
-- Absence of removed routes.
-- Multipart attachment handling without arbitrary paths.
+Không lưu argument hoặc result chứa secret.
 
-### 16.2 Python unit tests
+## 14. Luồng dữ liệu
 
-- Identity and group allowlists.
-- Direct and group session keys.
-- Mention gating.
-- Tool allow, approve, and block decisions.
-- Indirect memory mutation detection.
-- Approval code parsing, expiry, single use, and first-decision-wins behavior.
-- Redaction and audit records.
+### 14.1 Group không mention
 
-### 16.3 Integration tests
+```text
+zca-js event
+→ normalize
+→ dedupe
+→ lưu conversation/message/media
+→ mention=false
+→ kết thúc, không gọi Hermes
+```
 
-Tests use a fake Zalo transport, the real plugin loader, and a temporary HERMES_HOME. They prove:
+### 14.2 Group có mention hợp lệ
 
-- Unauthorized traffic never reaches an agent.
-- Authorized direct and group messages enter the correct session.
-- Read-only tools execute immediately.
-- Sensitive tools block and resume only after an administrator decision.
-- Employee memory proposals change memory only after approval.
-- Sensitive group outputs are delivered privately.
-- Restarts and timeouts deny pending operations.
+```text
+zca-js event
+→ normalize
+→ dedupe
+→ lưu conversation/message/media
+→ sender thuộc allowlist và mention=true
+→ tải 100 message gần nhất
+→ Hermes xử lý
+→ lưu và gửi câu trả lời
+```
 
-### 16.4 Concurrency and failure tests
+### 14.3 DM thành viên
 
-- Multiple employees run without session cross-talk.
-- Two administrators decide simultaneously and only one wins.
-- Duplicate Zalo events create one turn.
-- A Zalo delivery failure does not rerun a tool.
-- Cookie expiry alerts administrators and stops command processing.
+```text
+zca-js event
+→ xác thực allowed user
+→ dedupe và lưu
+→ tải context DM của chính sender
+→ Hermes xử lý
+→ lưu và gửi câu trả lời
+```
 
-### 16.5 Security and packaging tests
+### 14.4 Gọi chức năng Zalo
 
-- Production dependency audit and signature verification.
-- Secret-pattern scan.
-- Syntax and import checks for JavaScript and Python.
-- npm package dry-run inspection.
-- File permission checks.
-- Loopback bind and token enforcement.
-- Tests that forbidden routes return not found.
-- Linux systemd install, restart, and fresh-boot smoke tests.
+```text
+Hermes chọn method
+→ zalo describe nếu cần
+→ zalo call
+→ bridge /api/:method
+→ zca-js
+→ redact result
+→ lưu tool_activity
+→ trả kết quả
+```
 
-## 17. Acceptance Criteria
+### 14.5 Admin action
 
-The release is ready only when all of the following are demonstrated:
+```text
+zalo_admin
+→ kiểm tra requester trong admin_users
+→ thực hiện ngay
+→ lưu tool_activity
+→ trả kết quả đã redact
+```
 
-1. A non-allowlisted Zalo ID cannot invoke Hermes or any tool.
-2. An authorized direct message receives a response in the correct private session.
-3. An approved group responds only to an allowlisted sender who mentions the assistant.
-4. Direct history never appears in a group session or another employee's direct session.
-5. Shared memory is readable everywhere but mutates only after administrator approval.
-6. Read-only tools run immediately.
-7. Sensitive tools remain blocked until one administrator approves.
-8. Denial, timeout, and restart never execute the pending operation.
-9. Two concurrent administrator decisions produce one final verdict.
-10. Generic API passthrough, credential export, and unrelated Zalo administration routes are absent.
-11. Cookie and bridge secrets are absent from HTTP responses, approval prompts, and logs.
-12. Duplicate inbound events create one agent turn and one tool-call sequence.
-13. Failed Zalo delivery never reruns an already completed tool.
-14. Every accepted operation has a complete, redacted audit chain.
-15. Both systemd services recover after a VPS reboot and require no QR scan while the saved session remains valid.
+## 15. Cấu hình
 
-## 18. Residual Risks
+Cấu hình hành vi nằm trong `config.yaml`:
 
-- zca-js uses an unofficial personal-account Zalo API. Zalo may challenge, restrict, or lock the company account. The company must use a dedicated account, conservative rates, and a documented QR recovery procedure.
-- Zalo ID proves control of a Zalo account, not the physical identity of the employee. A compromised allowlisted account inherits that employee's access until an administrator removes it from configuration.
-- All employees share the same read visibility within configured company workspace roots and shared memory. Department-level document permissions are outside the first release.
-- A malicious document or message may attempt prompt injection. Deterministic policy hooks and approval gates remain authoritative, but administrators must still inspect sensitive requests before approving them.
-- Third-party email and internal systems may not provide idempotency. When the outcome is uncertain, the assistant reports the uncertainty and does not retry automatically.
-- The application-level audit database can be altered by a privileged VPS operator. External log shipping or cryptographic audit sealing is outside the first release.
+```yaml
+gateway:
+  platforms:
+    zalo:
+      extra:
+        bridge_url: http://127.0.0.1:8787
+        allowed_users:
+          - "zalo-id-1"
+        admin_users:
+          - "zalo-id-1"
+        allowed_groups:
+          - "group-id-1"
+        group_mode: mention
+        history_context_messages: 100
+        media_max_bytes: 20971520
+        history_retention: forever
+```
 
-## 19. Design Decisions
+Bridge token và credential nằm ngoài YAML trong secret file hoặc `.env` có quyền hạn chế.
 
-- Use the version-1.0.9 plugin fork instead of rewriting the bridge or modifying Hermes core.
-- Operate one company Zalo account on one Linux VPS.
-- Restrict access to configured employees and approved groups.
-- Use direct sessions per employee and shared sessions per group.
-- Share company memory across sessions.
-- Route employee memory proposals to administrators for approval.
-- Use role-aware one-time approval for sensitive tools.
-- Send approval requests privately to all administrators; first decision wins.
-- Keep the fork private and company-specific.
-- Preserve a minimal Zalo transport surface and remove unrelated automation APIs.
+Startup fail nếu:
+
+- Không có admin.
+- Admin không nằm trong allowed users.
+- Bridge token thiếu.
+- Database không thể mở hoặc migrate.
+
+## 16. Xử lý lỗi
+
+### 16.1 Tin nhắn trùng
+
+Unique dedupe key làm lần ghi thứ hai trở thành no-op. Duplicate không gọi Hermes lần hai.
+
+### 16.2 Lỗi lưu lịch sử
+
+Nếu event hợp lệ nhưng Conversation Store không ghi được, adapter không gọi Hermes cho event đó. Bot giữ kết nối và báo admin để tránh có câu trả lời không được lưu.
+
+### 16.3 Zalo mất kết nối
+
+Bridge reconnect có backoff. Session chết hoặc cookie hết hạn được báo cho admin để login QR lại.
+
+### 16.4 Lỗi tool Zalo
+
+- Method không tồn tại: trả lỗi rõ ràng.
+- Sai parameter: Hermes có thể gọi `describe` rồi thử lại nếu operation chắc chắn chưa chạy.
+- Outcome gửi/mutation chưa rõ: báo `unknown`, không tự chạy lại.
+- Rate limit: dừng, backoff và thông báo người dùng.
+
+### 16.5 Media lỗi
+
+Message vẫn được lưu; attachment được đánh dấu `failed` hoặc `metadata_only`.
+
+## 17. Log và mức bảo vệ tối thiểu
+
+Do mọi thành viên được tin cậy, hệ thống không có approval hoặc policy chi tiết. Tuy vậy vẫn giữ bốn bảo vệ vận hành:
+
+1. Allowlist cho người kích hoạt Hermes.
+2. Admin Guard cho cấu hình, memory, service và lịch sử quản trị.
+3. Bridge loopback cùng token nội bộ.
+4. Redaction credential khỏi chat và log.
+
+Không log raw cookie, token, API key, password hoặc IMEI. Nội dung hội thoại nằm trong Conversation Store, không lặp lại vào system journal.
+
+## 18. Triển khai
+
+VPS chạy:
+
+1. Node Zalo bridge.
+2. Hermes gateway cùng plugin Zalo.
+3. SQLite Conversation Store và thư mục media dưới `HERMES_HOME`.
+
+Hai service chạy bằng Unix user riêng, tự restart khi lỗi và khởi động cùng VPS. QR login chỉ cần lại khi Zalo session hết hạn hoặc bị kick.
+
+## 19. Kiểm thử
+
+### 19.1 Hội thoại
+
+- Group không mention vẫn lưu nhưng không gọi Hermes.
+- Group có mention từ allowed user lưu trước rồi gọi Hermes.
+- Mention từ user ngoài allowlist được lưu nhưng không gọi Hermes.
+- DM thành viên được lưu và phản hồi.
+- Hai DM không trộn lịch sử.
+- Group không đọc được DM.
+- Bot outbound cũng được lưu.
+
+### 19.2 Media
+
+- Media nhỏ hơn hoặc bằng 20 MiB được lưu.
+- Media lớn hơn được ghi `metadata_only`.
+- Stream vượt cap bị dừng.
+- Download lỗi không làm mất message.
+- Duplicate event không tải media lần hai.
+
+### 19.3 Tool
+
+- `zalo list` và `describe` trả catalog đúng bản `zca-js`.
+- Thành viên gọi được các nhóm send, reaction, undo, poll, friend, group và read API.
+- Positional fallback dùng được method không có named schema.
+- Result có secret bị redact.
+- Outcome không rõ không bị retry mù.
+
+### 19.4 Admin
+
+- Non-admin không dùng được `zalo_admin`.
+- Admin thêm/xóa user và admin được.
+- Không thể xóa admin cuối cùng.
+- Chỉ admin sửa memory chung.
+- Admin export/xóa lịch sử và quản lý service được.
+- Thành viên không né Admin Guard bằng file, terminal hoặc execute-code.
+
+### 19.5 Restart
+
+- SQLite và media còn nguyên sau restart.
+- Event đã lưu không gọi Hermes lần hai.
+- Hai service tự lên sau reboot khi Zalo session còn hiệu lực.
+
+## 20. Tiêu chí nghiệm thu
+
+Release đạt khi chứng minh được:
+
+1. Năm thành viên trong allowlist chat được với Hermes.
+2. Người ngoài allowlist không kích hoạt Hermes.
+3. Mọi message trong group công ty được lưu dù không mention.
+4. Group chỉ nhận câu trả lời khi allowed user mention bot.
+5. Chat riêng được tách đúng theo thành viên.
+6. Hermes nhận đúng 100 message gần nhất và tìm được lịch sử cũ.
+7. Media không quá 20 MiB được lưu; media lớn hơn chỉ có metadata.
+8. Thành viên dùng được toàn bộ tool Hermes thông thường mà không cần approval.
+9. Thành viên dùng được tool Zalo đa năng với toàn bộ method vận hành `zca-js`.
+10. Admin dùng được các chức năng quản trị ngay lập tức.
+11. Non-admin không sửa được allowlist, config, memory hoặc service.
+12. Cookie, token và password không xuất hiện trong chat hoặc log.
+13. Duplicate event không tạo message, media hoặc agent turn thứ hai.
+14. Outcome Zalo chưa rõ không bị tự động chạy lại.
+15. Lịch sử, media và Zalo session hợp lệ sống qua VPS restart.
+
+## 21. Rủi ro còn lại
+
+- `zca-js` là API không chính thức; tài khoản có thể bị challenge, giới hạn hoặc khóa.
+- Thành viên có quyền rộng và thao tác chạy ngay. Một yêu cầu nhầm có thể gây gửi nhầm, đổi group hoặc thay đổi dữ liệu trước khi admin can thiệp.
+- Một tài khoản Zalo chỉ có một listener web ổn định; hệ thống không active-active.
+- Lịch sử và media tăng dần vì retention mặc định là lâu dài; admin cần theo dõi dung lượng và chủ động export/xóa.
+- Prompt injection trong tin nhắn hoặc tài liệu có thể khiến Hermes dùng tool sai. Thiết kế chấp nhận rủi ro này vì nhóm nhỏ và các thành viên được tin cậy.
+
+## 22. Thay thế thiết kế cũ
+
+Spec này thay thế thiết kế approval-heavy trước đó. Kế hoạch triển khai cũ có approval broker, mã duyệt, role policy chi tiết, transport tối thiểu và audit SQLite phức tạp không còn là nguồn yêu cầu hợp lệ.
+
+Sau khi người dùng duyệt bản spec viết này, cần viết lại toàn bộ kế hoạch triển khai bằng tiếng Việt theo thiết kế mới; không chỉnh vá kế hoạch cũ.
