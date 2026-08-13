@@ -12,6 +12,18 @@
 
 ## Checkpoint phiên làm việc
 
+- Official release `v1.1.4` hoàn tất ngày 2026-08-13 tại commit
+  `017ae3497dd8cffcb55c3a76bda7360301d2b6e2`. CI tag run
+  `31681198848` PASS: matrix Ubuntu/macOS/Windows `3/3` và job
+  `release-artifacts` PASS; artifact `hermes-zalo-company-v1.1.4` được upload
+  với digest bundle
+  `sha256:4c5010e319a09ff1bb23cb9444a84fe3252783f4f4680ecd64ddf39911012095`.
+  URL evidence:
+  `https://github.com/anhakvip777/hermes-zalo-company-assistant/actions/runs/31681198848`.
+  Tag cũ `v1.1.3` giữ bất biến làm evidence cho builder portability failure;
+  không dùng artifact từ run đó. Việc tiếp theo: tester tải artifact `v1.1.4`,
+  đối chiếu manifest/checksum bên trong và triển khai thử nghiệm lên profile
+  Zalo cô lập.
 - Tag `v1.1.3` ngày 2026-08-13: compatibility matrix PASS cả Ubuntu, macOS và
   Windows nhưng job `release-artifacts` fail tại builder. Root cause là fallback
   tự suy ra `npm-cli.js` cạnh binary Node chỉ đúng trên máy Windows local, không
