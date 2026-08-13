@@ -25,6 +25,7 @@
     "systemd/",
     "hermes-plugin/*.py",
     "hermes-plugin/plugin.yaml",
+    "hermes-plugin/admin_web/",
     "hermes-plugin/migrations/",
     "npm-shrinkwrap.json",
     "pyproject.toml",

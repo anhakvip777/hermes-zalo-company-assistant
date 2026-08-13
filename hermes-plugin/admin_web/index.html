@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="vi" data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Hermes Zalo Admin</title>
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+  <script src="/admin/assets/app.js" defer></script>
+</head>
+<body>
+  <div id="login-screen" class="login-screen">
+    <form id="login" class="login-terminal" novalidate>
+      <p class="terminal-title">HERMES ZALO · ADMIN LOGIN</p>
+      <button id="login-theme-toggle" class="login-theme-toggle" type="button" aria-label="Đổi giao diện màu">Giao diện</button>
+      <label for="password">Mật khẩu quản trị</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button type="submit">Đăng nhập</button>
+      <p id="login-error" class="error-panel" aria-live="assertive"></p>
+    </form>
+  </div>
+  <div id="app-shell" class="app-shell hidden">
+    <aside id="sidebar" class="sidebar">
+      <div class="brand" aria-label="Hermes Zalo Company Assistant">
+        <span class="brand-mark" aria-hidden="true">HZ</span>
+        <span class="brand-copy"><strong>HERMES ZALO</strong><small>Company Assistant</small></span>
+      </div>
+      <button id="sidebar-toggle" type="button" aria-label="Thu gọn thanh điều hướng"><span class="sidebar-toggle-icon" aria-hidden="true">☰</span><span class="nav-label">Thu gọn</span></button>
+      <nav id="nav" aria-label="Điều hướng quản trị">
+        <button data-view="overview" type="button"><span class="nav-icon" aria-hidden="true">◈</span><span class="nav-label">Tổng quan</span></button>
+        <button data-view="access" type="button"><span class="nav-icon" aria-hidden="true">◎</span><span class="nav-label">Danh bạ &amp; Allowlist</span></button>
+        <button data-view="history" type="button"><span class="nav-icon" aria-hidden="true">▤</span><span class="nav-label">Hội thoại</span></button>
+        <button data-view="system" type="button"><span class="nav-icon" aria-hidden="true">⌘</span><span class="nav-label">Hệ thống &amp; Hoạt động</span></button>
+      </nav>
+      <button id="logout" type="button" aria-label="Đăng xuất"><span class="nav-icon" aria-hidden="true">↪</span><span class="nav-label">Đăng xuất</span></button>
+    </aside>
+    <section class="workspace">
+      <header class="topbar">
+        <span id="route-label"></span>
+        <button id="theme-toggle" type="button" aria-label="Đổi giao diện màu"><span class="theme-icon" aria-hidden="true">◐</span></button>
+      </header>
+      <main id="app" aria-live="polite"></main>
+    </section>
+  </div>
+  <div id="modal-root"></div>
+  <div id="toast-root" aria-live="polite"></div>
+</body>
+</html>

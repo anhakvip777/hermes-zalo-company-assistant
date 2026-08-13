@@ -13,7 +13,9 @@
 | `docs/operations/configuration.md` | Cấu hình, secret, allowlist, QR |
 | `docs/operations/acceptance-checklist.md` | Checklist nghiệm thu |
 | `docs/superpowers/specs/2026-08-10-hermes-zalo-admin-web-ui-design.md` | Thiết kế Admin Web UI nhúng trong Hermes Zalo plugin |
+| `docs/superpowers/specs/2026-08-13-hermes-zalo-admin-web-terminal-redesign-design.md` | Thiết kế làm mới Admin Web theo phong cách terminal, giữ nguyên API và database |
 | `docs/superpowers/plans/2026-08-10-hermes-zalo-admin-web-ui.md` | Kế hoạch triển khai Admin Web UI theo TDD |
+| `docs/superpowers/plans/2026-08-13-hermes-zalo-admin-web-terminal-redesign.md` | Kế hoạch TDD làm mới Admin Web theo spec terminal đã duyệt |
 | `docs/superpowers/specs/2026-08-09-hermes-zalo-company-assistant-design.md` | Spec trợ lý công ty Hermes trên Zalo |
 | `docs/superpowers/plans/2026-08-09-hermes-zalo-company-assistant.md` | Kế hoạch triển khai trợ lý công ty Hermes trên Zalo |
 | `bridge/config.js` | Đọc/validate bridge config |
@@ -56,6 +58,9 @@
 | `scripts/acceptance.py` | Acceptance runner |
 | `scripts/run-node-tests.mjs` | Chạy Node tests và fail nếu test count bằng 0 |
 | `scripts/build-release.mjs` | Tạo runtime package, source/audit bundle và manifest checksum/traceability |
+| `hermes-plugin/admin_web/index.html` | App shell, login, sidebar, topbar và vùng render của Admin Web |
+| `hermes-plugin/admin_web/admin.css` | Theme terminal, component, responsive và accessibility |
+| `hermes-plugin/admin_web/app.js` | API client, UI state, navigation và renderer bốn màn hình |
 
 ## File sửa
 

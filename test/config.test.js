@@ -18,6 +18,7 @@ test("npm package includes the documented Python dependency files", () => {
   assert.ok(packageJson.files.includes("requirements-test.txt"));
   assert.ok(packageJson.files.includes("requirements-runtime.txt"));
   assert.ok(packageJson.files.includes("pyproject.toml"));
+  assert.ok(packageJson.files.includes("hermes-plugin/admin_web/"));
 });
 
 
@@ -185,6 +186,17 @@ test("npm dry-run artifact contains a reproducible dependency lock", () => {
   const metadata = JSON.parse(result.stdout)[0];
   const paths = new Set(metadata.files.map((entry) => entry.path));
   assert.ok(paths.has("npm-shrinkwrap.json") || paths.has("package-lock.json"));
+  for (const required of [
+    "hermes-plugin/admin_web/index.html",
+    "hermes-plugin/admin_web/admin.css",
+    "hermes-plugin/admin_web/app.js",
+  ]) assert.ok(paths.has(required), `missing ${required}`);
+});
+
+
+test("installer copies the complete admin web asset directory", () => {
+  const source = fs.readFileSync(path.join(ROOT, "install.mjs"), "utf8");
+  assert.match(source, /fs\.cpSync\(src, dest, \{ recursive: true, force: true \}\)/);
 });
 
 

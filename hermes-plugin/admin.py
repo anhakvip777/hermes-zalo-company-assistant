@@ -673,235 +673,22 @@ class _AdminSession:
     expires_at: float
 
 
-ADMIN_HTML = """<!doctype html>
-<html lang="vi"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light"><title>Hermes Zalo Admin</title>
-<style>
-:root{font-family:system-ui,sans-serif;color:#17202a;background:#f4f6f8}
-*{box-sizing:border-box}body{margin:0}header{padding:14px 20px;background:#075e54;color:#fff;font-weight:700}
-#layout{min-height:calc(100vh - 50px)}nav{display:flex;gap:8px;padding:12px;background:#fff;overflow:auto}
-button,input{font:inherit;padding:9px 11px}button{cursor:pointer}main{padding:16px}.hidden{display:none!important}
-.error{color:#b42318}.card{background:#fff;padding:14px;border-radius:10px;margin-bottom:10px;box-shadow:0 1px 2px #0001}
-@media(min-width:760px){#layout{display:grid;grid-template-columns:230px 1fr}nav{flex-direction:column}}
-</style></head><body><header>Hermes Zalo Admin</header><div id="layout">
-<nav id="nav" class="hidden"><button data-view="overview">Tổng quan</button>
-<button data-view="access">Danh bạ &amp; Allowlist</button><button data-view="history">Hội thoại</button>
-<button data-view="system">Hệ thống &amp; Hoạt động</button><button id="logout">Đăng xuất</button></nav>
-<main><form id="login" class="card"><h1>Đăng nhập</h1><label>Mật khẩu
-<input id="password" type="password" autocomplete="current-password" required></label>
-<button type="submit">Đăng nhập</button><p id="login-error" class="error" aria-live="polite"></p></form>
-<section id="app" class="hidden" aria-live="polite"></section></main></div>
-<script>
-const state={csrf:null,view:"overview",draft:null,renderVersion:0};
-async function api(path,options={}){const method=options.method||"GET";const headers={...(options.headers||{})};
-if(options.body&&!headers["Content-Type"])headers["Content-Type"]="application/json";
-if(state.csrf&&!['GET','HEAD'].includes(method))headers["X-CSRF-Token"]=state.csrf;
-const response=await fetch(path,{credentials:"same-origin",...options,method,headers});
-const data=await response.json().catch(()=>({code:"invalid_response",message:"Phản hồi không hợp lệ"}));
-if(!response.ok)throw Object.assign(new Error(data.message||"Yêu cầu thất bại"),{status:response.status,data});return data;}
-function el(tag,text,className){const node=document.createElement(tag);if(text!==undefined)node.textContent=String(text);if(className)node.className=className;return node;}
-function clearApp(title){const app=document.querySelector("#app");app.replaceChildren(el("h1",title));return app;}
-function card(title){const root=el("section",undefined,"card");if(title)root.append(el("h2",title));return root;}
-function row(label,value){const p=el("p");p.append(el("strong",`${label}: `),document.createTextNode(value===undefined||value===null||value===""?"—":String(value)));return p;}
-function button(label,action){const item=el("button",label);item.type="button";item.addEventListener("click",action);return item;}
-function entityId(item){return String(item?.id??item?.userId??item?.uid??item?.groupId??item?.threadId??"");}
-function entityName(item){return String(item?.name??item?.displayName??item?.zaloName??item?.groupName??entityId(item));}
-function friendStatus(item){const explicit=item?.friendStatus;if(explicit!==undefined&&explicit!==null&&explicit!=="")return String(explicit);const isFriend=item?.isFr;if(isFriend===true||isFriend===1||isFriend==="1")return "Bạn bè";if(isFriend===false||isFriend===0||isFriend==="0")return "Chưa kết bạn";const account=item?.accountStatus;return account===undefined||account===null||account===""?"":String(account);}
-function setMember(values,id,enabled){const set=new Set((values||[]).map(String));enabled?set.add(String(id)):set.delete(String(id));return [...set].sort();}
-function checkbox(label,checked,onChange){const wrap=el("label");const input=document.createElement("input");input.type="checkbox";input.checked=checked;input.addEventListener("change",()=>onChange(input.checked));wrap.append(input,document.createTextNode(` ${label} `));return wrap;}
-function showApp(){document.querySelector("#login").classList.add("hidden");document.querySelector("#nav").classList.remove("hidden");document.querySelector("#app").classList.remove("hidden");}
-function showLogin(message=""){document.querySelector("#login").classList.remove("hidden");document.querySelector("#nav").classList.add("hidden");document.querySelector("#app").classList.add("hidden");document.querySelector("#login-error").textContent=message;}
-async function renderOverview(){const app=clearApp("Tổng quan");const data=await api("/admin/api/overview");const bot=card("Tài khoản bot");bot.append(row("Họ tên",data.bot?.name),row("Zalo ID",data.bot?.id),row("Zalo",data.bridge?.loggedIn?"Đã đăng nhập":"Chưa đăng nhập"),row("Hermes",data.adapter_active===false?"Không hoạt động":"Đang hoạt động"));
-const counts=card("Số liệu");for(const [label,key] of [["Bạn bè","friends"],["Nhóm","groups"],["Thành viên được phép","allowed_users"],["Quản trị viên","admin_users"],["Nhóm được phép","allowed_groups"]])counts.append(row(label,data.counts?.[key]??0));counts.append(row("Hội thoại",data.history?.conversations??0),row("Tin nhắn",data.history?.messages??0));
-const system=card("Mô hình");system.append(row("Provider",data.provider??"unknown"),row("Model",data.model??"unknown"),button("Làm mới",renderOverview));app.append(bot,counts,system);}
-async function renderAccess(){const app=clearApp("Danh bạ & Allowlist");const [access,friends,groups]=await Promise.all([api("/admin/api/access"),api("/admin/api/friends"),api("/admin/api/groups")]);state.draft={allowed_users:[...access.allowed_users],admin_users:[...access.admin_users],allowed_groups:[...access.allowed_groups],fingerprint:access.fingerprint};
-const people=card("Cá nhân");for(const person of friends.items||[]){const id=entityId(person);if(!id)continue;const item=el("p");item.append(document.createTextNode(`${entityName(person)} (${id}) `),checkbox("Thành viên",state.draft.allowed_users.includes(id),enabled=>{state.draft.allowed_users=setMember(state.draft.allowed_users,id,enabled);if(!enabled)state.draft.admin_users=setMember(state.draft.admin_users,id,false);}),checkbox("Admin",state.draft.admin_users.includes(id),enabled=>{state.draft.admin_users=setMember(state.draft.admin_users,id,enabled);if(enabled)state.draft.allowed_users=setMember(state.draft.allowed_users,id,true);}));people.append(item);}
-const userInput=document.createElement("input");userInput.placeholder="Nhập Zalo ID";people.append(userInput,button("Thêm thành viên",()=>{if(userInput.value.trim()){state.draft.allowed_users=setMember(state.draft.allowed_users,userInput.value.trim(),true);userInput.value="";}}));
-const groupCard=card("Nhóm công ty");for(const group of groups.items||[]){const id=entityId(group);if(!id)continue;const item=el("div",undefined,"card");item.append(document.createTextNode(`${entityName(group)} (${id}) `),checkbox("Cho phép",state.draft.allowed_groups.includes(id),enabled=>{state.draft.allowed_groups=setMember(state.draft.allowed_groups,id,enabled);}),button("Xem thành viên",async()=>{const data=await api(`/admin/api/groups/${encodeURIComponent(id)}/members`);const list=el("ul");for(const member of data.items||[])list.append(el("li",`${entityName(member)} (${entityId(member)})`));item.append(list);}));groupCard.append(item);}
-const groupInput=document.createElement("input");groupInput.placeholder="Nhập Group ID";groupCard.append(groupInput,button("Thêm nhóm",()=>{if(groupInput.value.trim()){state.draft.allowed_groups=setMember(state.draft.allowed_groups,groupInput.value.trim(),true);groupInput.value="";}}));
-const actions=card();actions.append(button("Lưu và áp dụng",async()=>{const saved=await api("/admin/api/access/apply",{method:"POST",body:JSON.stringify(state.draft)});state.draft={...saved.config,fingerprint:saved.fingerprint};await renderAccess();}),button("Tải lại",renderAccess));app.append(people,groupCard,actions);}
-async function renderHistory(){const app=clearApp("Hội thoại");const controls=card("Tìm kiếm");const query=document.createElement("input");query.placeholder="Tên, ID hoặc nội dung";controls.append(query,button("Tìm tin nhắn",async()=>{const result=await api(`/admin/api/history/search?query=${encodeURIComponent(query.value)}`);const output=card("Kết quả");for(const message of result.items||[])output.append(row(`${message.sender_name??message.sender_id}`,message.text));app.append(output);}));app.append(controls);
-const list=await api("/admin/api/conversations?limit=50&offset=0");for(const conversation of list.items||[]){const item=card(`${conversation.title??conversation.thread_id} (${conversation.thread_id})`);item.append(row("Loại",conversation.thread_type),row("Tin nhắn",conversation.message_count),button("Mở hội thoại",async()=>{const page=await api(`/admin/api/conversations/${conversation.id}?limit=100&offset=0`);const messages=el("div");for(const message of page.items||[]){const p=el("p",`${message.sender_name??message.sender_id}: ${message.text}`);for(const attachment of message.attachments||[]){const link=el("a",` 📎 ${attachment.filename??attachment.kind}`);link.href=`/admin/api/attachments/${attachment.id}`;p.append(link);}messages.append(p);}item.append(messages);}),button("Xóa hội thoại",async()=>{if(confirm(`Xóa lịch sử ${conversation.thread_id}?`)){await api("/admin/api/history/delete",{method:"POST",body:JSON.stringify({thread_type:conversation.thread_type,thread_id:conversation.thread_id,confirm:true})});await renderHistory();}}));app.append(item);}
-app.append(button("Xuất toàn bộ JSONL",async()=>{const response=await fetch("/admin/api/history/export",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","X-CSRF-Token":state.csrf},body:"{}"});if(!response.ok)throw new Error("Không thể xuất lịch sử");const blob=await response.blob();const link=document.createElement("a");link.href=URL.createObjectURL(blob);link.download="history.jsonl";link.click();URL.revokeObjectURL(link.href);}));}
-function beginRender(view){state.view=view;return ++state.renderVersion;}
-function renderIsCurrent(token,view){return token===state.renderVersion&&state.view===view;}
-function navigate(view){state.view=view;return renderCurrent();}
-async function renderOverviewEnhanced(token){
-token=token??beginRender("overview");
-const data=await api("/admin/api/overview");
-if(!renderIsCurrent(token,"overview"))return false;
-const app=clearApp("Tổng quan");
-const adapterState=(data.adapter_active===true||data.connected===true)?"Đang hoạt động":((data.adapter_active===false||data.connected===false)?"Không hoạt động":"Không rõ");
-const zaloState=data.bridge?.loggedIn===true?"Đã đăng nhập":(data.bridge?.loggedIn===false?"Chưa đăng nhập":"Không rõ");
-const bridgeState=data.bridge?.error??(data.bridge?.ok===true?"Hoạt động":(data.bridge?.ok===false?"Không kết nối":"Không rõ"));
-const gatewayState=data.gateway?.status??adapterState;
-const bot=card("Tài khoản bot");
-bot.append(row("Họ tên",data.bot?.name),row("Zalo ID",data.bot?.id),row("Zalo",zaloState),row("Hermes",adapterState));
-const runtime=card("Trạng thái hệ thống");
-runtime.append(row("Bridge",bridgeState),row("Hermes Gateway",gatewayState),row("Provider",data.provider??"unknown"),row("Model",data.model??"unknown"));
-const counts=card("Số liệu");
-for(const [label,key] of [["Bạn bè","friends"],["Nhóm","groups"],["Thành viên được phép","allowed_users"],["Quản trị viên","admin_users"],["Nhóm được phép","allowed_groups"]])counts.append(row(label,data.counts?.[key]??0));
-counts.append(row("Hội thoại",data.history?.conversations??0),row("Tin nhắn",data.history?.messages??0),row("Tin gần nhất",data.latest_message_at));
-const activity=card("Hoạt động gần đây");
-const recentActivity=data.recent_activity||[];
-if(!recentActivity.length)activity.append(el("p","Chưa có hoạt động gần đây."));
-for(const item of recentActivity)activity.append(row(item.occurred_at,`${item.tool_name} — ${item.status}`));
-const actions=card("Thao tác nhanh");
-actions.append(button("Làm mới",()=>renderCurrent()),button("Mở allowlist",()=>navigate("access")),button("Mở QR",()=>navigate("system")),button("Mở hệ thống",()=>navigate("system")));
-app.append(bot,runtime,counts,activity,actions);
-return true;
-}
-async function loadQrWithRetry(image,attempts=[0,500,1000,2000,4000],token=state.renderVersion){
-for(const delay of attempts){
-if(!renderIsCurrent(token,"system")||image.isConnected===false)return false;
-if(delay)await new Promise(resolve=>setTimeout(resolve,delay));
-try{
-const response=await fetch(`/admin/api/system/qr.png?t=${Date.now()}`,{credentials:"same-origin"});
-if(!response.ok)continue;
-const blob=await response.blob();
-const nextUrl=URL.createObjectURL(blob);
-if(!renderIsCurrent(token,"system")||image.isConnected===false){URL.revokeObjectURL(nextUrl);return false;}
-if(state.qrUrl)URL.revokeObjectURL(state.qrUrl);
-state.qrUrl=nextUrl;image.src=nextUrl;image.alt="QR đăng nhập Zalo";return true;
-}catch(error){if(error?.status===401)throw error;}
-}
-if(renderIsCurrent(token,"system")&&image.isConnected!==false){image.removeAttribute("src");image.alt="QR chưa sẵn sàng; thử lại sau";}
-return false;
-}
-async function pollAfterRestart(target="gateway"){
-const delays=[500,1000,2000,4000,8000];
-for(const delay of delays){
-await new Promise(resolve=>setTimeout(resolve,delay));
-try{
-if(target==="bridge"){
-const data=await api("/admin/api/system");
-if(data.bridge?.ok===true&&!data.bridge?.error){await navigate("system");return true;}
-}else{
-const data=await api("/admin/api/session");
-state.csrf=data.csrf;await navigate("system");return true;
-}
-}catch(error){
-if(error?.status===401){state.csrf=null;showLogin("Phiên đã hết hạn, vui lòng đăng nhập lại");return false;}
-}
-}
-const label=target==="bridge"?"Bridge":"Gateway";
-const hint=target==="bridge"?"systemctl restart hermes-zalo-company-bridge":"systemctl restart hermes-gateway";
-document.querySelector("#app")?.append(el("p",`${label} chưa trở lại. Dùng SSH/CLI: ${hint}`,"error"));
-return false;
-}
-function historyQuery(filters,limit,offset){const params=new URLSearchParams();for(const [key,value] of Object.entries(filters)){if(value)params.set(key,String(value));}params.set("limit",String(limit));params.set("offset",String(offset));return params.toString();}
-function historyFilters(){const source=state.historyFilters||{};return {thread_type:source.thread_type||"",sender_id:source.sender_id||"",since:source.since||"",until:source.until||"",query:source.query||""};}
-async function renderConversationEnhanced(container,conversation,offset=0){const filters=historyFilters();const params=historyQuery({sender_id:filters.sender_id,since:filters.since,until:filters.until,query:filters.query},100,offset);const page=await api(`/admin/api/conversations/${conversation.id}?${params}`);container.replaceChildren(el("h2",`${conversation.title??conversation.thread_id} (${conversation.thread_id})`));const messageList=el("div");for(const message of page.items||[]){const item=el("article","", "card");item.append(row("Người gửi",`${message.sender_name??message.sender_id} (${message.sender_id})`),row("Thời gian",message.sent_at),row("Nội dung",message.text));if(message.is_bot)item.append(el("span","Bot ","badge"));if(message.mentioned_bot)item.append(el("span","Mention bot ","badge"));for(const attachment of message.attachments||[]){const lineItem=el("p",`${attachment.filename??attachment.kind} — ${attachment.size_bytes??"—"} bytes — ${attachment.download_status??"unknown"}`);if(attachment.id){const link=el("a"," Tải file");link.href=`/admin/api/attachments/${encodeURIComponent(attachment.id)}`;lineItem.append(link);}item.append(lineItem);}messageList.append(item);}container.append(messageList);const pager=el("div");if(offset>0)pager.append(button("Tin mới hơn",()=>renderConversationEnhanced(container,conversation,Math.max(0,offset-100))));if(page.next_offset!==null&&page.next_offset!==undefined)pager.append(button("Tin cũ hơn",()=>renderConversationEnhanced(container,conversation,page.next_offset)));container.append(pager);const activity=await api(`/admin/api/activity?thread_type=${encodeURIComponent(conversation.thread_type)}&thread_id=${encodeURIComponent(conversation.thread_id)}&limit=20&offset=0`);const activityCard=card("Hoạt động tool");for(const entry of activity.items||[])activityCard.append(row(entry.occurred_at,`${entry.tool_name} — ${entry.status}`));container.append(activityCard);}
-async function renderHistoryEnhanced(token){
-token=token??beginRender("history");
-const app=clearApp("Hội thoại");const controls=card("Bộ lọc hội thoại");const filters=historyFilters();
-const type=document.createElement("select");type.name="thread_type";for(const option of [["","Tất cả"],["dm","Chat riêng"],["group","Nhóm"]]){const item=document.createElement("option");item.value=option[0];item.textContent=option[1];item.selected=filters.thread_type===option[0];type.append(item);}
-const sender=document.createElement("input");sender.name="sender_id";sender.placeholder="sender_id";sender.value=filters.sender_id;
-const since=document.createElement("input");since.name="since";since.placeholder="since (ISO-8601)";since.value=filters.since;
-const until=document.createElement("input");until.name="until";until.placeholder="until (ISO-8601)";until.value=filters.until;
-const query=document.createElement("input");query.name="query";query.placeholder="Từ khóa nội dung hoặc thread ID";query.value=filters.query;
-const apply=button("Lọc",()=>{state.historyFilters={thread_type:type.value,sender_id:sender.value.trim(),since:since.value.trim(),until:until.value.trim(),query:query.value.trim()};void navigate("history");});
-controls.append(type,sender,since,until,query,apply);app.append(controls);const list=el("div");app.append(list);
-async function loadPage(offset=0){
-const current=historyFilters();const result=await api(`/admin/api/conversations?${historyQuery(current,50,offset)}`);
-if(!renderIsCurrent(token,"history"))return false;
-list.replaceChildren();
-if(!(result.items||[]).length)list.append(el("p","Chưa có hội thoại phù hợp."));
-for(const conversation of result.items||[]){const item=card(`${conversation.title??conversation.thread_id} (${conversation.thread_id})`);item.append(row("Loại",conversation.thread_type),row("Tin nhắn",conversation.message_count),row("Tin gần nhất",conversation.last_message_at));const open=button("Mở hội thoại",()=>renderConversationEnhanced(item,conversation,0));item.append(open,button("Xóa hội thoại",async()=>{if(window.confirm(`Xóa lịch sử ${conversation.thread_id}?`)){await api("/admin/api/history/delete",{method:"POST",body:JSON.stringify({thread_type:conversation.thread_type,thread_id:conversation.thread_id,confirm:true})});await loadPage(offset);}}));list.append(item);}
-const pager=el("div");if(offset>0)pager.append(button("Trang trước",()=>loadPage(Math.max(0,offset-50))));if(result.next_offset!==null&&result.next_offset!==undefined)pager.append(button("Trang sau",()=>loadPage(result.next_offset)));list.append(pager);return true;
-}
-await loadPage(0);if(!renderIsCurrent(token,"history"))return false;
-const actions=card("Dữ liệu");
-actions.append(button("Xuất theo bộ lọc",async()=>{const response=await fetch("/admin/api/history/export",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","X-CSRF-Token":state.csrf},body:JSON.stringify(historyFilters())});if(!response.ok)throw new Error("Không thể xuất lịch sử");const blob=await response.blob();const link=document.createElement("a");link.href=URL.createObjectURL(blob);link.download="history.jsonl";link.click();URL.revokeObjectURL(link.href);}),button("Xóa theo bộ lọc",async()=>{if(window.confirm("Xóa toàn bộ phạm vi đang lọc?")){await api("/admin/api/history/delete",{method:"POST",body:JSON.stringify({...historyFilters(),confirm:true})});await navigate("history");}}));
-app.append(actions);return true;
-}
-async function renderAccessEnhanced(token){
-token=token??beginRender("access");
-const access=await api("/admin/api/access");
-let friends,groups,contactsStale=false;
-try{[friends,groups]=await Promise.all([api("/admin/api/friends"),api("/admin/api/groups")]);}
-catch(error){
-if(error?.status===401||!state.accessSnapshot?.friends||!state.accessSnapshot?.groups)throw error;
-friends=state.accessSnapshot.friends;groups=state.accessSnapshot.groups;contactsStale=true;
-}
-if(!renderIsCurrent(token,"access"))return false;
-state.accessSnapshot={access,friends,groups};
-if(!state.draft||!state.draft.fingerprint)state.draft={allowed_users:[...(access.allowed_users||[])],admin_users:[...(access.admin_users||[])],allowed_groups:[...(access.allowed_groups||[])],fingerprint:access.fingerprint};
-const app=clearApp("Danh bạ & Allowlist");
-if(contactsStale||friends?.stale||groups?.stale)app.append(el("p","Bridge tạm mất; đang hiển thị dữ liệu danh bạ gần nhất.","error"));
-const people=card("Cá nhân");
-const peopleItems=[...(friends?.items||[])];const seenPeople=new Set(peopleItems.map(entityId));
-for(const id of new Set([...(state.draft.allowed_users||[]),...(state.draft.admin_users||[])]))if(id&&!seenPeople.has(String(id)))peopleItems.push({id:String(id),name:String(id),unlisted:true});
-for(const person of peopleItems){
-const id=entityId(person);if(!id)continue;const status=friendStatus(person);const item=el("p");
-item.append(document.createTextNode(`${entityName(person)} (${id}) `));
-if(person.unlisted)item.append(document.createTextNode("— Không còn trong danh bạ "));
-else if(status)item.append(document.createTextNode(`— ${status} `));
-item.append(checkbox("Thành viên",state.draft.allowed_users.includes(id),enabled=>{state.draft.allowed_users=setMember(state.draft.allowed_users,id,enabled);if(!enabled)state.draft.admin_users=setMember(state.draft.admin_users,id,false);}),checkbox("Admin",state.draft.admin_users.includes(id),enabled=>{state.draft.admin_users=setMember(state.draft.admin_users,id,enabled);if(enabled)state.draft.allowed_users=setMember(state.draft.allowed_users,id,true);}));people.append(item);
-}
-if(!peopleItems.length)people.append(el("p","Không có cá nhân nào."));
-const userInput=document.createElement("input");userInput.placeholder="Nhập Zalo ID";people.append(userInput,button("Thêm thành viên",()=>{if(userInput.value.trim()){state.draft.allowed_users=setMember(state.draft.allowed_users,userInput.value.trim(),true);userInput.value="";}}));
-const groupCard=card("Nhóm công ty");
-const groupItems=[...(groups?.items||[])];const seenGroups=new Set(groupItems.map(entityId));
-for(const id of state.draft.allowed_groups||[])if(id&&!seenGroups.has(String(id)))groupItems.push({id:String(id),name:String(id),unlisted:true});
-for(const group of groupItems){
-const id=entityId(group);if(!id)continue;const item=el("div",undefined,"card");const memberHost=el("div");
-const memberButton=button("Xem thành viên",async()=>{const data=await api(`/admin/api/groups/${encodeURIComponent(id)}/members`);const list=el("ul");for(const member of data.items||[]){const lineItem=el("li");const memberId=entityId(member);const status=friendStatus(member);lineItem.append(document.createTextNode(`${entityName(member)} (${memberId}) `),checkbox("Được phép",state.draft.allowed_users.includes(memberId),enabled=>{state.draft.allowed_users=setMember(state.draft.allowed_users,memberId,enabled);if(!enabled)state.draft.admin_users=setMember(state.draft.admin_users,memberId,false);}));if(status)lineItem.append(document.createTextNode(` — ${status}`));list.append(lineItem);}memberHost.replaceChildren(list);});
-item.append(document.createTextNode(`${entityName(group)} (${id}) — ${group.unlisted?"Không còn trong danh sách nhóm":`${group.memberCount??"?"} thành viên`} `),checkbox("Cho phép",state.draft.allowed_groups.includes(id),enabled=>{state.draft.allowed_groups=setMember(state.draft.allowed_groups,id,enabled);}),memberButton,memberHost);groupCard.append(item);
-}
-if(!groupItems.length)groupCard.append(el("p","Không có nhóm nào."));
-const groupInput=document.createElement("input");groupInput.placeholder="Nhập Group ID";groupCard.append(groupInput,button("Thêm nhóm",()=>{if(groupInput.value.trim()){state.draft.allowed_groups=setMember(state.draft.allowed_groups,groupInput.value.trim(),true);groupInput.value="";}}));
-const actions=card();const conflict=el("div");
-const reload=button("Tải lại cấu hình",()=>{state.draft=null;return navigate("access");});
-const save=button("Lưu và áp dụng",async()=>{
-save.disabled=true;for(const control of app.querySelectorAll?.("input,button")||[])control.disabled=true;
-try{
-const submitted=JSON.parse(JSON.stringify(state.draft));
-const saved=await api("/admin/api/access/apply",{method:"POST",body:JSON.stringify(submitted)});
-state.draft={...saved.config,fingerprint:saved.fingerprint};state.accessSnapshot.access={...saved.config,fingerprint:saved.fingerprint};await navigate("access");
-}catch(error){
-save.disabled=false;for(const control of app.querySelectorAll?.("input,button")||[])control.disabled=false;
-if(error.status!==409)throw error;conflict.replaceChildren(el("p",error.message||"Cấu hình đã thay đổi; tải lại cấu hình hiện tại.","error"));
-}
-});
-actions.append(save,reload,conflict);app.append(people,groupCard,actions);return true;
-}
-async function renderSystemEnhanced(token){
-token=token??beginRender("system");
-const data=await api("/admin/api/system");
-if(!renderIsCurrent(token,"system"))return false;
-const app=clearApp("Hệ thống & Hoạt động");
-const lastError=data.bridge?.error||data.bridge?.lastError||data.bridge_error||"";
-const status=card("Trạng thái");
-const zaloState=data.bridge?.loggedIn===true?"Đã đăng nhập":(data.bridge?.loggedIn===false?"Chưa đăng nhập":"Không rõ");
-const bridgeState=lastError||(data.bridge?.ok===true?"Hoạt động":(data.bridge?.ok===false?"Không kết nối":"Không rõ"));
-const gatewayState=data.gateway?.status??data.gateway_status??((data.adapter_active===true||data.connected===true)?"Hoạt động":((data.adapter_active===false||data.connected===false)?"Không hoạt động":"Không rõ"));
-status.append(row("Họ tên",data.bot?.name),row("Zalo ID",data.bot?.id),row("Zalo",zaloState),row("Bridge",bridgeState),row("Hermes Gateway",gatewayState),row("Provider",data.provider),row("Model",data.model),row("QR",data.qr?.status),row("SSE client",data.bridge?.sseClients??data.sse_clients??"—"),row("Lỗi gần nhất",lastError||"Không có"));
-const qr=document.createElement("img");qr.alt="QR đăng nhập Zalo";qr.width=220;
-const actions=card("Điều khiển");
-actions.append(button("Tạo QR mới",async()=>{await api("/admin/api/system/qr",{method:"POST",body:"{}"});await loadQrWithRetry(qr,[0,500,1000,2000,4000],token);}),button("Reconnect Zalo",async()=>{await api("/admin/api/system/reconnect",{method:"POST",body:"{}"});await loadQrWithRetry(qr,[0,500,1000,2000,4000],token);}));
-for(const target of ["bridge","gateway"])actions.append(button(`Restart ${target}`,async()=>{if(window.confirm(`Restart ${target}?`)){await api("/admin/api/system/restart",{method:"POST",body:JSON.stringify({target})});await pollAfterRestart(target);}}));
-if(lastError)actions.append(button("Sao chép lỗi",()=>navigator.clipboard.writeText(lastError)));
-actions.append(qr);app.append(status,actions);void loadQrWithRetry(qr,[0,500,1000,2000,4000],token);
-const logs=await api("/admin/api/system/logs?lines=50");
-if(!renderIsCurrent(token,"system"))return false;
-const logCard=card("Log gần nhất");if((logs.lines||[]).length)logCard.append(el("pre",logs.lines.join("\\n")));else logCard.append(el("p","Chưa có log."));app.append(logCard);
-const savedFilters=state.activityFilters||{};const activityControls=card("Bộ lọc hoạt động");const activityInputs={};
-for(const [name,placeholder] of [["requester_id","requester_id"],["tool_name","tool_name"],["status","status"],["thread_type","thread_type"],["thread_id","thread_id"],["since","since (ISO-8601)"],["until","until (ISO-8601)"]]){const input=document.createElement("input");input.name=name;input.placeholder=placeholder;input.value=savedFilters[name]||"";activityInputs[name]=input;activityControls.append(input);}
-const activityCard=card("Hoạt động");let activityRequestVersion=0;
-async function loadActivity(offset=0){const requestVersion=++activityRequestVersion;const filters={};for(const [name,input] of Object.entries(activityInputs))filters[name]=input.value.trim();const activity=await api(`/admin/api/activity?${historyQuery(filters,50,offset)}`);if(!renderIsCurrent(token,"system")||requestVersion!==activityRequestVersion)return false;activityCard.replaceChildren(el("h2","Hoạt động"));if(!(activity.items||[]).length)activityCard.append(el("p","Chưa có hoạt động."));for(const item of activity.items||[])activityCard.append(row(item.occurred_at,`${item.tool_name} — ${item.status}`));const pager=el("div");if(offset>0)pager.append(button("Trang trước hoạt động",()=>loadActivity(Math.max(0,offset-50))));if(activity.next_offset!==null&&activity.next_offset!==undefined)pager.append(button("Trang sau hoạt động",()=>loadActivity(activity.next_offset)));activityCard.append(pager);return true;}
-activityControls.append(button("Lọc hoạt động",()=>{state.activityFilters=Object.fromEntries(Object.entries(activityInputs).map(([name,input])=>[name,input.value.trim()]));return loadActivity(0);}));app.append(activityControls,activityCard);await loadActivity(0);return true;
-}
-async function renderSystem(){const app=clearApp("Hệ thống & Hoạt động");const data=await api("/admin/api/system");const status=card("Trạng thái");status.append(row("Zalo",data.bridge?.loggedIn?"Đã đăng nhập":"Chưa đăng nhập"),row("Bridge",data.bridge?.error??(data.bridge?.ok?"Hoạt động":"Không kết nối")),row("Provider",data.provider),row("Model",data.model),row("QR",data.qr?.status));
-const qr=document.createElement("img");qr.alt="QR đăng nhập Zalo";qr.width=220;qr.src=`/admin/api/system/qr.png?t=${Date.now()}`;const actions=card("Điều khiển");actions.append(button("Tạo QR mới",async()=>{await api("/admin/api/system/qr",{method:"POST",body:"{}"});qr.src=`/admin/api/system/qr.png?t=${Date.now()}`;}),button("Reconnect Zalo",()=>api("/admin/api/system/reconnect",{method:"POST",body:"{}"})));for(const target of ["bridge","gateway"])actions.append(button(`Restart ${target}`,async()=>{if(confirm(`Restart ${target}?`))await api("/admin/api/system/restart",{method:"POST",body:JSON.stringify({target})});}));actions.append(qr);app.append(status,actions);
-const logs=await api("/admin/api/system/logs?lines=50");const logCard=card("Log gần nhất");const pre=el("pre",(logs.lines||[]).join("\\n"));logCard.append(pre);app.append(logCard);const activity=await api("/admin/api/activity?limit=50&offset=0");const activityCard=card("Hoạt động");for(const item of activity.items||[])activityCard.append(row(item.occurred_at,`${item.tool_name} — ${item.status}`));app.append(activityCard);}
-async function renderCurrent(){const view=state.view;const token=++state.renderVersion;const titles={overview:"Tổng quan",access:"Danh bạ & Allowlist",history:"Hội thoại",system:"Hệ thống & Hoạt động"};const loading=clearApp(titles[view]??"Đang tải");loading.append(el("p","Đang tải…"));try{if(view==="overview")await renderOverviewEnhanced(token);else if(view==="access")await renderAccessEnhanced(token);else if(view==="history")await renderHistoryEnhanced(token);else await renderSystemEnhanced(token);}catch(error){if(!renderIsCurrent(token,view))return;if(error.status===401){showLogin("Phiên đã hết hạn, vui lòng đăng nhập lại");return;}const app=clearApp("Có lỗi");app.append(row("Chi tiết",error.message),button("Thử lại",renderCurrent));if(error.status===409)app.append(button("Tải lại cấu hình",()=>{state.draft=null;return navigate("access");}));}}
-document.querySelector("#login").addEventListener("submit",async event=>{event.preventDefault();try{const data=await api("/admin/api/login",{method:"POST",body:JSON.stringify({password:document.querySelector("#password").value})});state.csrf=data.csrf;showApp();await renderCurrent();}catch(error){document.querySelector("#login-error").textContent=error.message;}});
-document.querySelector("#logout").addEventListener("click",async()=>{await api("/admin/api/logout",{method:"POST",body:"{}"});location.reload();});
-for(const item of document.querySelectorAll("[data-view]"))item.addEventListener("click",async()=>{state.view=item.dataset.view;await renderCurrent();});
-api("/admin/api/session").then(data=>{state.csrf=data.csrf;showApp();return renderCurrent();}).catch(()=>showLogin());
-</script></body></html>"""
+ADMIN_WEB_ROOT = Path(__file__).resolve().parent / "admin_web"
+
+
+def _read_admin_asset(name: str) -> str:
+    if name not in {"index.html", "admin.css", "app.js"}:
+        raise RuntimeError(f"unknown Admin Web asset: {name}")
+    path = ADMIN_WEB_ROOT / name
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"required Admin Web asset is missing: {name}") from exc
+
+
+ADMIN_HTML = _read_admin_asset("index.html")
+ADMIN_CSS = _read_admin_asset("admin.css")
+ADMIN_APP_JS = _read_admin_asset("app.js")
 
 
 class AdminWebApp:
@@ -1064,7 +851,18 @@ class AdminWebApp:
 
         @web.middleware
         async def auth(request: Any, handler: Callable[..., Any]):
-            public = {("GET", "/admin/"), ("POST", "/admin/api/login")}
+            public = {
+                ("GET", "/admin/"),
+                ("GET", "/admin/assets/admin.css"),
+                ("GET", "/admin/assets/app.js"),
+                ("POST", "/admin/api/login"),
+            }
+            if (
+                request.method == "GET"
+                and request.path.startswith("/admin/assets/")
+                and (request.method, request.path) not in public
+            ):
+                return self._error(404, "not_found", "Không tìm thấy tài nguyên")
             if (request.method, request.path) not in public:
                 try:
                     session_id, session = self._require_session(request)
@@ -1093,6 +891,8 @@ class AdminWebApp:
             client_max_size=256 * 1024,
         )
         app.router.add_get("/admin/", self._page)
+        app.router.add_get("/admin/assets/admin.css", self._admin_css)
+        app.router.add_get("/admin/assets/app.js", self._admin_js)
         app.router.add_post("/admin/api/login", self._login)
         app.router.add_get("/admin/api/session", self._session_route)
         app.router.add_post("/admin/api/logout", self._logout)
@@ -1136,9 +936,36 @@ class AdminWebApp:
             headers={
                 "Cache-Control": "no-store",
                 "Content-Security-Policy": (
-                    "default-src 'self'; style-src 'unsafe-inline'; "
-                    "script-src 'unsafe-inline'; img-src 'self' data: blob:"
+                    "default-src 'self'; base-uri 'none'; object-src 'none'; "
+                    "frame-ancestors 'none'; form-action 'self'; "
+                    "style-src 'self'; script-src 'self'; img-src 'self' blob:"
                 ),
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    async def _admin_css(self, _request: Any):
+        from aiohttp import web
+
+        return web.Response(
+            text=ADMIN_CSS,
+            content_type="text/css",
+            charset="utf-8",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    async def _admin_js(self, _request: Any):
+        from aiohttp import web
+
+        return web.Response(
+            text=ADMIN_APP_JS,
+            content_type="application/javascript",
+            charset="utf-8",
+            headers={
+                "Cache-Control": "no-cache",
                 "X-Content-Type-Options": "nosniff",
             },
         )

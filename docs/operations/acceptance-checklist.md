@@ -1,6 +1,6 @@
 # Checklist nghiệm thu
 
-Trạng thái bằng chứng ngày 2026-08-11: Node `34/34`, toàn bộ Python `166/166`,
+Trạng thái bằng chứng UI terminal ngày 2026-08-13: Node `67/67`, toàn bộ Python `220/220`, Admin Web `81/81`; full acceptance `ok: true`, npm audit 0 vulnerability, pip check sạch và diff check pass.\n\nTrạng thái bằng chứng ngày 2026-08-11: Node `34/34`, toàn bộ Python `166/166`,
 integration `14/14`, acceptance `ok: true` và `git diff --check` exit `0`.
 Production Admin Web đã đăng nhập thành công trên loopback; Tổng quan, Allowlist,
 Hội thoại và Hệ thống/Hoạt động đã được đọc trực tiếp. Chỉ đánh dấu `[x]` cho
@@ -46,3 +46,19 @@ mục đã có bằng chứng tự động hoặc runtime; các thao tác mutati
 - [x] `python scripts/acceptance.py --static --json` xác nhận continuity, manifest và checksum migration.
 - [x] Mở phiên Codex mới và xác nhận agent đọc `AGENTS.md`, kiến trúc, database, manifest và checkpoint trước khi sửa.
 - [x] `npm test`, `pytest`, integration, security smoke và `git diff --check` đều pass.
+
+## Admin Web terminal UI
+
+- [x] 1280×720 dark/light: sidebar mở, thu gọn và reload vẫn giữ state.
+- [x] 768 px: sidebar icon-only; không tràn ngang toàn trang.
+- [x] 390×844: bottom navigation; table thành card; modal và toast không bị che.
+- [x] Login sai/đúng, session hết hạn và CSRF lỗi hiển thị thông báo tiếng Việt.
+- [x] Overview loading/empty/error; Access stale/draft/409; History filter/page/export/delete.
+- [x] System QR/log/activity/restart; không tự retry mutation.
+- [x] Tab/Shift+Tab, Enter, Space, Escape và focus ring hoạt động.
+- [x] `prefers-reduced-motion` tắt skeleton/transition không cần thiết.
+
+Bằng chứng QA phiên 2026-08-13: fake runtime `http://127.0.0.1:8879/admin/`,
+viewport 1280×720, 768×900 và 390×844; kiểm tra DOM/CSS xác nhận `body.scrollWidth`
+không vượt viewport, tablet dùng sidebar icon-only, mobile dùng bottom navigation.
+Dữ liệu QA là fixture cục bộ, không chứa ID/token/runtime thật.

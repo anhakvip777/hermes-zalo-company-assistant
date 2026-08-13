@@ -100,6 +100,15 @@ Allowed users may search and read shared history from every group in
 They cannot read another member's DM, export/delete company history, change
 retention, or perform admin configuration, service, or shared-memory operations.
 
+## Admin Web
+
+The terminal-style Admin Web is responsive, supports system/light/dark themes,
+and has a collapsible sidebar. The browser persists only two versioned UI
+preferences; passwords, sessions, CSRF values, and company data are never stored
+in `localStorage`. Use a currently supported Chrome, Edge, Firefox, or Safari.
+The redesign does not change APIs, the database, or permissions. Missing
+`admin_web` assets fail startup; reinstall the complete package.
+
 ## Conversation behavior
 
 For an allowed company group, the adapter deduplicates and stores every message

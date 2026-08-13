@@ -16,6 +16,7 @@ from history_store import HistoryStore
 from request_context import Requester, bind_requester
 from tooling import ZaloTooling, register_tooling
 from admin import (
+    ADMIN_APP_JS,
     ADMIN_HTML,
     AdminService,
     AdminSessionSigner,
@@ -152,11 +153,7 @@ async def authenticated_web_client(
 
 
 def run_admin_javascript(body: str) -> subprocess.CompletedProcess[bytes]:
-    script = ADMIN_HTML.split("<script>", 1)[1].split("</script>", 1)[0]
-    definitions = script.split(
-        'document.querySelector("#login").addEventListener("submit"',
-        1,
-    )[0]
+    definitions = ADMIN_APP_JS.split("// BOOTSTRAP", 1)[0]
     harness = r'''
 import assert from "node:assert/strict";
 class FakeNode {
@@ -166,35 +163,61 @@ class FakeNode {
     this.children=[];
     this.listeners={};
     this.attributes={};
-    this.classList={add(){},remove(){}};
+    this.dataset={};
+    this.classList={add(){},remove(){},contains(){return false;}};
     this.value="";
     this.checked=false;
   }
   append(...items) {
     for (const item of items) {
-      this.children.push(typeof item==="string"?new FakeNode("#text",item):item);
+      const child=typeof item==="string"?new FakeNode("#text",item):item;
+      child.parentNode=this;
+      this.children.push(child);
     }
   }
   replaceChildren(...items) { this.children=[];this.textContent="";this.append(...items); }
+  remove() { if(this.parentNode){this.parentNode.children=this.parentNode.children.filter(child=>child!==this);this.parentNode=null;} }
   addEventListener(name,callback) { (this.listeners[name]??=[]).push(callback); }
   async click() { for (const callback of this.listeners.click??[]) await callback({target:this}); }
+  focus() { this.focused=true; }
   removeAttribute(name) { delete this.attributes[name];delete this[name]; }
   setAttribute(name,value) { this.attributes[name]=String(value);this[name]=String(value); }
 }
 const testNodes={
-  "#app":new FakeNode("section"),
-  "#login":new FakeNode("form"),
-  "#nav":new FakeNode("nav"),
-  "#login-error":new FakeNode("p"),
+    "#app":new FakeNode("section"),
+    "#login":new FakeNode("form"),
+    "#login-screen":new FakeNode("div"),
+    "#app-shell":new FakeNode("div"),
+    "#nav":new FakeNode("nav"),
+    "#login-error":new FakeNode("p"),
+    "#route-label":new FakeNode("span"),
+    "#theme-toggle":new FakeNode("button"),
+    "#login-theme-toggle":new FakeNode("button"),
+    "#sidebar-toggle":new FakeNode("button"),
+    "#modal-root":new FakeNode("div"),
+    "#toast-root":new FakeNode("div"),
+};
+const documentListeners={};
+const storage=new Map();
+globalThis.localStorage={
+  getItem:key=>storage.has(key)?storage.get(key):null,
+  setItem:(key,value)=>storage.set(key,String(value)),
+  removeItem:key=>storage.delete(key),
 };
 globalThis.document={
   createElement:tag=>new FakeNode(tag),
   createTextNode:value=>new FakeNode("#text",value),
   querySelector:selector=>testNodes[selector]??null,
   querySelectorAll:()=>[],
+  addEventListener:(name,callback)=>{(documentListeners[name]??=[]).push(callback);},
+  removeEventListener:(name,callback)=>{documentListeners[name]=(documentListeners[name]??[]).filter(item=>item!==callback);},
 };
+document.body=new FakeNode("body");
+document.documentElement=new FakeNode("html");
+document.documentElement.dataset={};
 globalThis.window=globalThis;
 window.confirm=()=>true;
+window.matchMedia=query=>({matches:query.includes("dark"),addEventListener(){},removeEventListener(){}});
 globalThis.location={reload(){}};
 URL.createObjectURL=()=>"blob:test";
 URL.revokeObjectURL=()=>{};
@@ -471,19 +494,12 @@ async def test_admin_web_html_has_history_filters_and_recovery_polling(
         html = await response.text()
         assert response.status == 200
         for marker in (
-            "sender_id",
-            "thread_type",
-            "since",
-            "until",
-            "next_offset",
-            "mentioned_bot",
-            "download_status",
-            "loadQrWithRetry",
-            "pollAfterRestart",
+            'href="/admin/assets/admin.css"',
+            'src="/admin/assets/app.js"',
         ):
             assert marker in html
         assert "innerHTML" not in html
-        script = html.split("<script>", 1)[1].split("</script>", 1)[0]
+        script = ADMIN_APP_JS
         checked = subprocess.run(
             ["node", "--check", "-"],
             input=script.encode("utf-8"),
@@ -510,7 +526,49 @@ async def test_admin_web_csp_allows_blob_qr_images(tmp_path: Path) -> None:
     try:
         response = await client.get("/admin/")
         csp = response.headers["Content-Security-Policy"]
-        assert "img-src 'self' data: blob:" in csp
+        assert "img-src 'self' blob:" in csp
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_admin_web_serves_fixed_same_origin_assets_with_strict_csp(
+    tmp_path: Path,
+) -> None:
+    store = HistoryStore(tmp_path / "h.sqlite")
+    client, _cookie, _csrf = await authenticated_web_client(
+        tmp_path,
+        admin=AdminService(store=store),
+        store=store,
+        bridge=FakeBridge(),
+    )
+    try:
+        page = await client.get("/admin/")
+        css = await client.get("/admin/assets/admin.css")
+        script = await client.get("/admin/assets/app.js")
+        unknown = await client.get("/admin/assets/anything.js")
+        assert page.status == css.status == script.status == 200
+        assert unknown.status == 404
+        unknown_body = await unknown.json()
+        assert unknown_body["code"] == "not_found"
+        assert page.content_type == "text/html"
+        assert css.content_type == "text/css"
+        assert script.content_type == "application/javascript"
+        html = await page.text()
+        assert 'href="/admin/assets/admin.css"' in html
+        assert 'src="/admin/assets/app.js"' in html
+        assert "<style" not in html
+        assert "<script>" not in html
+        assert page.headers["Cache-Control"] == "no-store"
+        assert css.headers["Cache-Control"] == "no-cache"
+        assert script.headers["Cache-Control"] == "no-cache"
+        assert script.headers["X-Content-Type-Options"] == "nosniff"
+        csp = page.headers["Content-Security-Policy"]
+        assert "default-src 'self'" in csp
+        assert "script-src 'self'" in csp
+        assert "style-src 'self'" in csp
+        assert "img-src 'self' blob:" in csp
+        assert "unsafe-inline" not in csp
     finally:
         await client.close()
 
@@ -537,7 +595,7 @@ const expired=await pollAfterRestart();
 assert.equal(expired,false);
 assert.equal(attempts,1);
 assert.equal(state.csrf,null);
-assert.equal(state.draft,originalDraft);
+    assert.equal(state.draft,null);
 assert.equal(renderCalls,0);
 assert.equal(loginMessages.length,1);
 assert.match(loginMessages[0],/hết hạn|đăng nhập/i);
@@ -562,6 +620,448 @@ assert.equal(renderCalls,1);
 assert.equal(loginMessages.length,0);
 '''
     )
+
+
+def test_admin_web_theme_and_sidebar_preferences_are_versioned_and_isolated() -> None:
+    assert_admin_javascript(
+        r'''
+storage.clear();
+applyInitialPreferences();
+assert.equal(document.documentElement.dataset.theme,"system");
+setTheme("dark");
+setSidebar("collapsed");
+assert.equal(storage.get("hz-admin-theme-v1"),"dark");
+assert.equal(storage.get("hz-admin-sidebar-v1"),"collapsed");
+assert.equal(storage.size,2);
+assert.equal(state.csrf,null);
+assert.equal(storage.has("csrf"),false);
+'''
+    )
+
+
+def test_overview_uses_terminal_status_components_without_dynamic_html() -> None:
+    assert_admin_javascript(
+        r'''
+globalThis.fetch=async()=>({ok:true,status:200,json:async()=>({
+  bot:{id:"bot-1",name:"Trợ lý"},bridge:{ok:true,loggedIn:true},
+  gateway:{status:"Hoạt động"},provider:"custom",model:"gpt-5.6-terra",
+  counts:{allowed_users:5,allowed_groups:2},history:{conversations:24,messages:1248},
+  recent_activity:[],
+})});
+await renderOverviewEnhanced();
+assert.ok(findNodes(testNodes["#app"],n=>n.className?.includes("terminal-frame")).length===1);
+assert.ok(findNodes(testNodes["#app"],n=>n.className?.includes("status-card")).length>=4);
+assert.match(nodeText(testNodes["#app"]),/bot-1/);
+assert.equal(APP_USES_INNER_HTML,false);
+'''
+    )
+
+
+def test_access_draft_guard_and_stale_snapshot_are_explicit() -> None:
+    assert_admin_javascript(
+        r'''
+state.draft={allowed_users:["u-1"],admin_users:[],allowed_groups:["g-1"],fingerprint:"fp"};
+state.savedAccess={allowed_users:[],admin_users:[],allowed_groups:["g-1"],fingerprint:"fp"};
+assert.equal(hasUnsavedAccessChanges(),true);
+const event={preventDefault(){this.prevented=true;},returnValue:undefined};
+handleBeforeUnload(event);
+assert.equal(event.prevented,true);
+assert.equal(event.returnValue,"");
+const stale=staleNotice({stale:true,error:"bridge unavailable"});
+assert.match(nodeText(stale),/Dữ liệu cũ/);
+'''
+    )
+
+
+def test_draft_bar_is_rendered_only_after_access_changes() -> None:
+    assert_admin_javascript(
+        r'''
+const host=el("div");
+state.draft={allowed_users:["u-1"],admin_users:[],allowed_groups:["g-1"]};
+state.savedAccess={allowed_users:["u-1"],admin_users:[],allowed_groups:["g-1"]};
+renderDraftBar(host,()=>{},()=>{});
+assert.doesNotMatch(nodeText(host),/Có thay đổi chưa áp dụng/);
+state.draft.allowed_users.push("u-2");
+renderDraftBar(host,()=>{},()=>{});
+assert.match(nodeText(host),/Có thay đổi chưa áp dụng/);
+'''
+    )
+
+
+def test_access_uses_responsive_tables_and_marks_draft_after_a_toggle() -> None:
+    assert_admin_javascript(
+        r'''
+const response=data=>({ok:true,status:200,json:async()=>data});
+globalThis.fetch=async path=>{
+  if(path==="/admin/api/access")return response({
+    allowed_users:["u-1"],admin_users:[],allowed_groups:["g-1"],fingerprint:"fp",
+  });
+  if(path==="/admin/api/friends")return response({items:[{id:"u-1",name:"Lan",isFr:true}]});
+  if(path==="/admin/api/groups")return response({items:[{id:"g-1",name:"Nhóm AI",memberCount:1}]});
+  throw new Error(path);
+};
+state.view="access";
+await renderAccessEnhanced();
+assert.ok(findNodes(testNodes["#app"],node=>node.className?.includes("data-table")).length>=2);
+assert.doesNotMatch(nodeText(testNodes["#app"]),/Có thay đổi chưa áp dụng/);
+const memberInput=findNodes(testNodes["#app"],node=>node.tagName==="INPUT"&&node.type==="checkbox")[0];
+memberInput.checked=false;
+for(const listener of memberInput.listeners.change||[])listener({target:memberInput});
+assert.match(nodeText(testNodes["#app"]),/Có thay đổi chưa áp dụng/);
+'''
+    )
+
+
+def test_history_delete_requires_explicit_modal_confirmation() -> None:
+    assert_admin_javascript(
+        r'''
+let deletes=0;
+globalThis.fetch=async(path,options={})=>{
+  if(path==="/admin/api/history/delete"){deletes+=1;return {ok:true,status:200,json:async()=>({success:true})};}
+  throw new Error(path);
+};
+const modal=confirmModal({title:"Xóa hội thoại",message:"Không thể hoàn tác",confirmLabel:"Xóa",tone:"danger"});
+assert.equal(deletes,0);
+modal.cancel();
+assert.equal(deletes,0);
+const confirmed=confirmModal({title:"Xóa hội thoại",message:"Không thể hoàn tác",confirmLabel:"Xóa",tone:"danger",onConfirm:()=>api("/admin/api/history/delete",{method:"POST",body:"{}"})});
+await confirmed.confirm();
+assert.equal(deletes,1);
+'''
+    )
+
+
+def test_system_restart_waits_for_confirmation_and_shows_pending_state() -> None:
+    assert_admin_javascript(
+        r'''
+let restartCalls=0;
+globalThis.fetch=async(path)=>{
+  if(path==="/admin/api/system/restart"){restartCalls+=1;return {ok:true,status:202,json:async()=>({accepted:true})};}
+  if(path==="/admin/api/session")return {ok:true,status:200,json:async()=>({csrf:"fresh"})};
+  throw new Error(path);
+};
+pollAfterRestart=async()=>true;
+const flow=restartConfirmation("gateway");
+assert.equal(restartCalls,0);
+flow.cancel();
+assert.equal(restartCalls,0);
+const accepted=restartConfirmation("gateway");
+await accepted.confirm();
+assert.equal(restartCalls,1);
+assert.equal(state.pendingOperation,"restart:gateway");
+'''
+    )
+
+
+def test_admin_web_keeps_shell_for_loading_and_redacted_errors() -> None:
+    assert_admin_javascript(
+        r'''
+showLoading("overview");
+assert.ok(findNodes(testNodes["#app"],node=>node.className?.includes("skeleton")).length>=1);
+const error=Object.assign(new Error("Không thể tải dữ liệu"),{status:500,data:{retryable:false}});
+showViewError(error,()=>{});
+assert.match(nodeText(testNodes["#app"]),/Không thể tải dữ liệu/);
+assert.ok(findNodes(testNodes["#app"],node=>node.tagName==="BUTTON"&&/Thử lại/.test(node.textContent)).length===1);
+assert.equal(testNodes["#app-shell"].classList.contains?.("hidden")??false,false);
+'''
+    )
+
+
+def test_expired_session_clears_in_memory_admin_web_state() -> None:
+    assert_admin_javascript(
+        r'''
+state.csrf="csrf";
+state.draft={allowed_users:["u-1"]};
+state.accessSnapshot={friends:{items:["private"]}};
+state.historyFilters={query:"private"};
+state.activityFilters={tool_name:"private"};
+state.pendingOperation="restart:gateway";
+state.qrUrl="blob:secret";
+let revoked="";
+URL.revokeObjectURL=value=>{revoked=value;};
+expireSession();
+assert.equal(state.csrf,null);
+assert.equal(state.draft,null);
+assert.equal(state.accessSnapshot,null);
+assert.equal(state.historyFilters,null);
+assert.equal(state.activityFilters,null);
+assert.equal(state.pendingOperation,null);
+assert.equal(state.qrUrl,null);
+assert.equal(revoked,"blob:secret");
+'''
+    )
+
+
+def test_qr_401_uses_the_same_expired_session_cleanup_path() -> None:
+    assert_admin_javascript(
+        r'''
+state.csrf="csrf";
+state.draft={allowed_users:["u-1"]};
+state.accessSnapshot={friends:{items:["private"]}};
+state.historyFilters={query:"private"};
+state.activityFilters={tool_name:"private"};
+state.pendingOperation="restart:gateway";
+state.qrUrl="blob:private";
+let revoked="";
+URL.revokeObjectURL=value=>{revoked=value;};
+const image=el("img");
+state.view="system";
+const token=++state.renderVersion;
+globalThis.fetch=async()=>({ok:false,status:401});
+await loadQrWithRetry(image,[0],token);
+assert.equal(state.csrf,null);
+assert.equal(state.draft,null);
+assert.equal(state.accessSnapshot,null);
+assert.equal(state.historyFilters,null);
+assert.equal(state.activityFilters,null);
+assert.equal(state.pendingOperation,null);
+assert.equal(state.qrUrl,null);
+assert.equal(revoked,"blob:private");
+'''
+    )
+
+
+def test_expired_session_clears_visible_sensitive_controls_and_modal() -> None:
+    assert_admin_javascript(
+        r'''
+state.csrf="csrf";
+state.view="access";
+state.draft={allowed_users:["u-1"]};
+testNodes["#password" ]=el("input");
+testNodes["#password"].value="secret";
+const modal=el("section");
+testNodes["#modal-root"].append(modal);
+testNodes["#toast-root"].append(el("div","private toast"));
+expireSession();
+assert.equal(testNodes["#password"].value,"");
+assert.equal(testNodes["#modal-root"].children.length,0);
+assert.equal(testNodes["#toast-root"].children.length,0);
+assert.equal(state.renderVersion>0,true);
+'''
+    )
+
+
+def test_history_export_uses_api_error_path_and_delayed_blob_cleanup() -> None:
+    assert_admin_javascript(
+        r'''
+const response=data=>({ok:true,status:200,json:async()=>data,blob:async()=>({})});
+globalThis.fetch=async(path,options)=>{if(path==="/admin/api/history/export")return response({});if(path.startsWith("/admin/api/conversations?"))return response({items:[],next_offset:null});throw new Error(path);};
+const originalUrl=URL.createObjectURL;const originalRevoke=URL.revokeObjectURL;let revoked="";
+URL.createObjectURL=()=>"blob:export";URL.revokeObjectURL=value=>{revoked=value;};
+const originalSetTimeout=globalThis.setTimeout;const timers=[];
+globalThis.setTimeout=(callback,delay)=>{timers.push({callback,delay});return timers.length;};
+await renderHistoryEnhanced();
+const exportButton=findNodes(testNodes["#app"],node=>node.tagName==="BUTTON"&&node.textContent==="Xuất theo bộ lọc")[0];
+assert.ok(exportButton);
+await exportButton.click();
+const link=findNodes(document.body,node=>node.tagName==="A"&&node.download==="history.jsonl")[0];
+assert.ok(link);
+assert.equal(revoked,"");
+assert.ok(document.body.children.includes(link));
+const cleanup=timers.find(timer=>timer.delay>=100&&timer.delay<4000);
+assert.ok(cleanup);
+cleanup.callback();
+assert.equal(revoked,"blob:export");
+assert.equal(document.body.children.includes(link),false);
+globalThis.setTimeout=originalSetTimeout;URL.createObjectURL=originalUrl;URL.revokeObjectURL=originalRevoke;
+'''
+    )
+
+
+def test_run_action_reports_failures_and_expires_on_401() -> None:
+    assert_admin_javascript(
+        r'''
+state.csrf="csrf";
+let result=await runAction(async()=>{throw Object.assign(new Error("Phiên hết hạn"),{status:401});},"Không thể xuất");
+assert.equal(result,false);
+assert.equal(state.csrf,null);
+result=await runAction(async()=>{throw new Error("Bridge tạm mất");},"Không thể xuất");
+assert.equal(result,false);
+assert.match(nodeText(testNodes["#toast-root"]),/Bridge tạm mất/);
+'''
+    )
+
+
+def test_qr_mutations_use_vietnamese_error_path_and_expire_on_401() -> None:
+    assert_admin_javascript(
+        r'''
+loadQrWithRetry=async()=>true;
+const response=(status,data={})=>({ok:status>=200&&status<300,status,json:async()=>data});
+let mutationStatus=500;const calls=[];
+globalThis.fetch=async(path,options={})=>{
+  calls.push({path,method:options.method||"GET",body:options.body});
+  if(path==="/admin/api/system")return response(200,{bot:{},bridge:{},gateway:{},qr:{}});
+  if(path==="/admin/api/system/logs?lines=50")return response(200,{lines:[]});
+  if(path.startsWith("/admin/api/activity?"))return response(200,{items:[],next_offset:null});
+  if(path==="/admin/api/system/qr"||path==="/admin/api/system/reconnect")return response(mutationStatus,{message:"service unavailable"});
+  throw new Error(`unexpected fetch ${path}`);
+};
+state.view="system";state.renderVersion=40;
+await renderSystemEnhanced(40);
+const create=findNodes(testNodes["#app"],node=>node.tagName==="BUTTON"&&node.textContent==="Tạo QR mới")[0];
+const reconnect=findNodes(testNodes["#app"],node=>node.tagName==="BUTTON"&&node.textContent==="Reconnect Zalo")[0];
+await create.click();
+assert.match(nodeText(testNodes["#toast-root"]),/Không thể tạo QR mới/);
+testNodes["#toast-root"].replaceChildren();
+await reconnect.click();
+assert.match(nodeText(testNodes["#toast-root"]),/Không thể kết nối lại Zalo/);
+state.csrf="csrf";mutationStatus=401;
+await create.click();
+assert.equal(state.csrf,null);
+assert.deepEqual(calls.filter(call=>call.path==="/admin/api/system/qr"||call.path==="/admin/api/system/reconnect").map(call=>[call.path,call.method,call.body]),[
+  ["/admin/api/system/qr","POST","{}"],
+  ["/admin/api/system/reconnect","POST","{}"],
+  ["/admin/api/system/qr","POST","{}"],
+]);
+'''
+    )
+
+
+def test_dynamic_admin_controls_have_accessible_names() -> None:
+    source = ADMIN_APP_JS
+    for marker in (
+        'setAttribute("aria-label","Loại hội thoại")',
+        'setAttribute("aria-label","Zalo ID người gửi")',
+        'setAttribute("aria-label","Từ thời điểm")',
+        'setAttribute("aria-label","Đến thời điểm")',
+        'setAttribute("aria-label","Từ khóa lịch sử")',
+        'setAttribute("aria-label","Thêm Zalo ID vào allowlist")',
+        'setAttribute("aria-label","Thêm Group ID vào allowlist")',
+    ):
+        assert marker in source
+
+    root = Path(__file__).parents[2] / "hermes-plugin" / "admin_web"
+    html = (root / "index.html").read_text("utf-8")
+    css = (root / "admin.css").read_text("utf-8")
+    assert 'id="logout"' in html and 'aria-label="Đăng xuất"' in html
+    assert ".sidebar #logout { display: none; }" not in css
+
+
+def test_admin_web_assets_include_accessibility_and_responsive_contracts() -> None:
+    root = Path(__file__).parents[2] / "hermes-plugin" / "admin_web"
+    html = (root / "index.html").read_text("utf-8")
+    css = (root / "admin.css").read_text("utf-8")
+    js = (root / "app.js").read_text("utf-8")
+    assert 'aria-label="Điều hướng quản trị"' in html
+    assert 'aria-live="assertive"' in html
+    assert ":focus-visible" in css
+    assert "prefers-reduced-motion" in css
+    assert "max-width: 620px" in css
+    assert "innerHTML" not in js
+    assert "unsafe-eval" not in js
+
+
+def test_confirm_modal_traps_focus_and_restores_the_trigger() -> None:
+    assert_admin_javascript(
+        r'''
+const trigger=el("button","Mở hộp thoại");
+document.activeElement=trigger;
+const modal=confirmModal({title:"Xóa",message:"Không thể hoàn tác",confirmLabel:"Xóa",tone:"danger"});
+const [cancel,confirm]=findNodes(modal.dialog,node=>node.tagName==="BUTTON");
+assert.equal(cancel.focused,true);
+let prevented=false;
+const shiftTab={key:"Tab",shiftKey:true,target:cancel,preventDefault(){prevented=true;}};
+for(const listener of documentListeners.keydown||[])listener(shiftTab);
+assert.equal(prevented,true);
+assert.equal(confirm.focused,true);
+prevented=false;
+const tab={key:"Tab",shiftKey:false,target:confirm,preventDefault(){prevented=true;}};
+for(const listener of documentListeners.keydown||[])listener(tab);
+assert.equal(prevented,true);
+assert.equal(cancel.focused,true);
+modal.cancel();
+assert.equal(trigger.focused,true);
+'''
+    )
+
+
+def test_admin_web_uses_labeled_local_icons_for_navigation_and_theme() -> None:
+    root = Path(__file__).parents[2] / "hermes-plugin" / "admin_web"
+    html = (root / "index.html").read_text("utf-8")
+    css = (root / "admin.css").read_text("utf-8")
+    assert 'class="nav-icon" aria-hidden="true"' in html
+    assert 'class="nav-label"' in html
+    assert 'class="theme-icon" aria-hidden="true"' in html
+    assert '.nav-icon' in css
+    assert '.nav-label' in css
+    assert '::first-letter' not in css
+
+
+def test_history_messages_have_distinct_bubbles_and_recalled_badge() -> None:
+    assert_admin_javascript(
+        r'''
+const response=data=>({ok:true,status:200,json:async()=>data});
+globalThis.fetch=async path=>{
+  if(path.startsWith("/admin/api/conversations/"))return response({items:[
+    {sender_id:"u-1",sender_name:"Lan",text:"Xin chào",sent_at:"2026-01-01T00:00:00Z",is_bot:0,mentioned_bot:0,recalled_at:"2026-01-01T00:01:00Z",attachments:[]},
+    {sender_id:"bot",sender_name:"Hermes",text:"Chào bạn",sent_at:"2026-01-01T00:02:00Z",is_bot:1,mentioned_bot:1,attachments:[]},
+  ],next_offset:null});
+  if(path.startsWith("/admin/api/activity"))return response({items:[]});
+  throw new Error(path);
+};
+const host=el("section");
+await renderConversationEnhanced(host,{id:1,thread_type:"dm",thread_id:"u-1"});
+assert.equal(findNodes(host,node=>node.className?.includes("message-bubble")).length,2);
+assert.equal(findNodes(host,node=>node.className?.includes("message-user")).length,1);
+assert.equal(findNodes(host,node=>node.className?.includes("message-bot")).length,1);
+assert.match(nodeText(host),/Đã thu hồi/);
+assert.match(nodeText(host),/Mention bot/);
+'''
+    )
+
+
+def test_history_keeps_message_search_and_mobile_back_action() -> None:
+    assert_admin_javascript(
+        r'''
+const calls=[];
+const response=data=>({ok:true,status:200,json:async()=>data});
+globalThis.fetch=async path=>{
+  calls.push(path);
+  if(path.startsWith("/admin/api/conversations?"))return response({items:[{id:7,title:"Nhóm AI",thread_type:"group",thread_id:"g-1",message_count:1,last_message_at:"t"}],next_offset:null});
+  if(path.startsWith("/admin/api/history/search?"))return response({items:[{sender_id:"u-1",sender_name:"Lan",text:"lịch họp"}]});
+  if(path.startsWith("/admin/api/conversations/7?"))return response({items:[],next_offset:null});
+  if(path.startsWith("/admin/api/activity?"))return response({items:[]});
+  throw new Error(path);
+};
+await renderHistoryEnhanced();
+const search=button("Tìm tin nhắn",async()=>{const result=await api(`/admin/api/history/search?query=${encodeURIComponent("lịch họp")}`);const output=card("Kết quả tin nhắn");for(const message of result.items||[])output.append(row(`${message.sender_name??message.sender_id} (${message.sender_id})`,message.text));testNodes["#app"].append(output);});
+testNodes["#app"].append(search);
+await search.click();
+assert.ok(calls.some(path=>path.startsWith("/admin/api/history/search?query=")));
+const open=findNodes(testNodes["#app"],node=>node.tagName==="BUTTON"&&node.textContent==="Mở hội thoại")[0];
+await open.click();
+assert.ok(findNodes(testNodes["#app"],node=>node.textContent==="Quay lại danh sách").length===1);
+'''
+    )
+
+
+def test_system_uses_mini_terminal_sections() -> None:
+    assert_admin_javascript(
+        r'''
+loadQrWithRetry=async()=>true;
+const response=data=>({ok:true,status:200,json:async()=>data});
+globalThis.fetch=async path=>{
+  if(path==="/admin/api/system")return response({bot:{},bridge:{},gateway:{},qr:{}});
+  if(path==="/admin/api/system/logs?lines=50")return response({lines:[]});
+  if(path.startsWith("/admin/api/activity?"))return response({items:[],next_offset:null});
+  throw new Error(path);
+};
+await renderSystemEnhanced();
+assert.ok(findNodes(testNodes["#app"],node=>node.className?.includes("mini-terminal")).length>=3);
+'''
+    )
+
+
+def test_admin_web_mobile_navigation_resets_desktop_sidebar_rules() -> None:
+    css = (
+        Path(__file__).parents[2]
+        / "hermes-plugin"
+        / "admin_web"
+        / "admin.css"
+    ).read_text("utf-8")
+    mobile = css.split("@media (max-width: 620px)", 1)[1]
+    assert "top: auto;" in mobile
+    assert "color: var(--text) !important;" in mobile
 
 
 def test_access_conflict_keeps_draft_until_reload_fetches_current_snapshot() -> None:
@@ -1089,6 +1589,70 @@ clearApp("Tổng quan mới");
 releasePage();
 await pending;
 assert.equal(nodeText(testNodes["#app"]),"Tổng quan mới");
+'''
+    )
+
+
+def test_conversation_detail_ignores_late_selection_and_expired_session() -> None:
+    assert_admin_javascript(
+        r'''
+let releaseA,releaseB,releaseExpired;
+const response=data=>({ok:true,status:200,json:async()=>data});
+globalThis.fetch=async path=>{
+  if(path.startsWith("/admin/api/conversations/a?"))return await new Promise(resolve=>{releaseA=()=>resolve(response({items:[{sender_id:"old",text:"stale-message"}],next_offset:null}));});
+  if(path.startsWith("/admin/api/conversations/b?"))return await new Promise(resolve=>{releaseB=()=>resolve(response({items:[{sender_id:"new",text:"current-message"}],next_offset:null}));});
+  if(path.startsWith("/admin/api/conversations/expired?"))return await new Promise(resolve=>{releaseExpired=()=>resolve(response({items:[{sender_id:"late",text:"expired-message"}],next_offset:null}));});
+  if(path.startsWith("/admin/api/activity?"))return response({items:[]});
+  throw new Error(`unexpected fetch ${path}`);
+};
+const detail=el("section");
+state.view="history";state.renderVersion=60;
+const first=renderConversationEnhanced(detail,{id:"a",thread_type:"group",thread_id:"g-a"},0,undefined,60);
+await Promise.resolve();
+const second=renderConversationEnhanced(detail,{id:"b",thread_type:"group",thread_id:"g-b"},0,undefined,60);
+await Promise.resolve();
+releaseB();await second;
+assert.match(nodeText(detail),/current-message/);
+releaseA();await first;
+assert.match(nodeText(detail),/current-message/);
+assert.doesNotMatch(nodeText(detail),/stale-message/);
+const expired=renderConversationEnhanced(detail,{id:"expired",thread_type:"group",thread_id:"g-expired"},0,undefined,60);
+await Promise.resolve();
+expireSession();releaseExpired();await expired;
+assert.doesNotMatch(nodeText(detail),/expired-message/);
+'''
+    )
+
+
+def test_group_member_request_ignores_late_refresh_and_expired_session() -> None:
+    assert_admin_javascript(
+        r'''
+let releaseFirst,releaseSecond,releaseExpired;
+const response=data=>({ok:true,status:200,json:async()=>data});
+let groupRequests=0;
+globalThis.fetch=async path=>{
+  if(path==="/admin/api/access")return response({allowed_users:[],admin_users:[],allowed_groups:[],fingerprint:"fp"});
+  if(path==="/admin/api/friends")return response({items:[]});
+  if(path==="/admin/api/groups")return response({items:[{id:"g-a",name:"A"},{id:"g-expired",name:"Expired"}]});
+  if(path==="/admin/api/groups/g-a/members")return await new Promise(resolve=>{
+    groupRequests+=1;
+    if(groupRequests===1)releaseFirst=()=>resolve(response({items:[{id:"old-member",name:"Stale member"}]}));
+    else releaseSecond=()=>resolve(response({items:[{id:"new-member",name:"Current member"}]}));
+  });
+  if(path==="/admin/api/groups/g-expired/members")return await new Promise(resolve=>{releaseExpired=()=>resolve(response({items:[{id:"expired-member",name:"Expired member"}]}));});
+  throw new Error(`unexpected fetch ${path}`);
+};
+await renderAccessEnhanced();
+const buttons=findNodes(testNodes["#app"],node=>node.tagName==="BUTTON"&&node.textContent==="Xem thành viên");
+const first=buttons[0].click();await Promise.resolve();
+const second=buttons[0].click();await Promise.resolve();
+releaseSecond();await second;
+assert.match(nodeText(testNodes["#app"]),/Current member/);
+releaseFirst();await first;
+assert.doesNotMatch(nodeText(testNodes["#app"]),/Stale member/);
+const expired=buttons[1].click();await Promise.resolve();
+expireSession();releaseExpired();await expired;
+assert.doesNotMatch(nodeText(testNodes["#app"]),/Expired member/);
 '''
     )
 
