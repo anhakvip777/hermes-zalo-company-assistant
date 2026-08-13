@@ -96,11 +96,14 @@ fs.mkdirSync(output, { recursive: true });
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-zalo-release-"));
 try {
-  const npmCli = process.env.npm_execpath || path.join(
-    path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js",
-  );
+  const npmCli = process.env.npm_execpath;
+  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   const packed = JSON.parse(
-    run(process.execPath, [npmCli, "pack", "--pack-destination", temp, "--json"]),
+    npmCli
+      ? run(process.execPath, [npmCli, "pack", "--pack-destination", temp, "--json"])
+      : run(npmCommand, ["pack", "--pack-destination", temp, "--json"], {
+          shell: process.platform === "win32",
+        }),
   )[0];
   const runtimeName = `hermes-zalo-company-${version}-runtime.tgz`;
   const runtimePath = path.join(output, runtimeName);
@@ -131,7 +134,7 @@ try {
       os: `${os.platform()} ${os.release()} ${os.arch()}`,
     },
     verification: {
-      expected_node_tests: 65,
+      expected_node_tests: 66,
       expected_python_tests_including_integration: 202,
       expected_integration_subset: 17,
       ci_evidence: !ciRelease && (allowDirty || status)

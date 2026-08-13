@@ -12,6 +12,15 @@
 
 ## Checkpoint phiên làm việc
 
+- Tag `v1.1.3` ngày 2026-08-13: compatibility matrix PASS cả Ubuntu, macOS và
+  Windows nhưng job `release-artifacts` fail tại builder. Root cause là fallback
+  tự suy ra `npm-cli.js` cạnh binary Node chỉ đúng trên máy Windows local, không
+  đúng với layout `actions/setup-node` trên Ubuntu. Giữ tag `v1.1.3` bất biến
+  làm evidence run lỗi. Bản sửa `1.1.4` resolve npm từ PATH khi thiếu
+  `npm_execpath`, có regression test và build pre-release thực tế PASS trên
+  Windows với nhánh fallback. Số Node test mới là `66`. Việc tiếp theo: full
+  verification, commit/push, tạo tag `v1.1.4`, chờ CI tag PASS và xác minh ba
+  artifact/checksum do run CI upload.
 - Cập nhật release `v1.1.3` ngày 2026-08-13: repo sạch ban đầu tại commit
   `89e3d17787d1562f98835495f427c3d542a162e8`; phát hiện manifest khai sai số
   Node test kỳ vọng `66` trong khi thực tế là `65`, đồng thời metadata npm còn

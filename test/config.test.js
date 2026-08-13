@@ -75,7 +75,7 @@ test("release manifest pins the exact Hermes commit and required API contracts",
   assert.match(source, /eb52760564dbba2e5971fa54bd67384e281cd3b8/);
   assert.match(source, /PlatformEntry\.env_enablement_fn/);
   assert.match(source, /MessageEvent\.channel_context/);
-  assert.match(source, /expected_node_tests:\s*65/);
+  assert.match(source, /expected_node_tests:\s*66/);
   assert.doesNotMatch(source, /hermes_agent:\s*"0\.19\.0"/);
 });
 
@@ -102,6 +102,15 @@ test("source audit bundle is built from the committed Git tree", () => {
   assert.match(source, /git["'], \["archive", "--format=tar\.gz"/);
   assert.match(source, /"HEAD"/);
   assert.doesNotMatch(source, /run\("tar", \[/);
+});
+
+
+test("release builder resolves npm from PATH when npm_execpath is unavailable", () => {
+  const source = fs.readFileSync(path.join(ROOT, "scripts", "build-release.mjs"), "utf8");
+  assert.match(source, /process\.env\.npm_execpath/);
+  assert.match(source, /process\.platform\s*===\s*["']win32["']\s*\?\s*["']npm\.cmd["']\s*:\s*["']npm["']/);
+  assert.match(source, /shell:\s*process\.platform\s*===\s*["']win32["']/);
+  assert.doesNotMatch(source, /path\.dirname\(process\.execPath\).*node_modules.*npm-cli\.js/s);
 });
 
 
