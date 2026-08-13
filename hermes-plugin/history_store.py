@@ -16,10 +16,14 @@ _SECRET_KEY_RE = re.compile(
     r"(?:password|passwd|token|cookie|api[_-]?key|secret|imei|authorization)",
     re.IGNORECASE,
 )
-_BEARER_RE = re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[^\s,;]+")
+_AUTHORIZATION_RE = re.compile(
+    r"(?im)(\bauthorization[ \t]*:[ \t]*"
+    r"(?:[A-Za-z][A-Za-z0-9._~-]*[ \t]+)?)[^\r\n]+"
+)
+_BARE_BEARER_RE = re.compile(r"(?i)(\bbearer\s+)[^\s,;\"']+")
 _ASSIGNMENT_SECRET_RE = re.compile(
-    r"(?i)\b(password|passwd|token|cookie|api[_-]?key|secret|imei)"
-    r"(\s*[:=]\s*)[^\s,;]+"
+    r"(?i)([\"']?)(password|passwd|token|cookie|api[_-]?key|secret|imei)([\"']?)"
+    r"(\s*[:=]\s*)(?:[\"'][^\"']*[\"']|[^\s,;}]+)"
 )
 
 
@@ -34,9 +38,10 @@ def _json(value: Any) -> str:
 def redact_text(value: str | None) -> str | None:
     if value is None:
         return None
-    redacted = _BEARER_RE.sub(r"\1[REDACTED]", str(value))
+    redacted = _AUTHORIZATION_RE.sub(r"\1[REDACTED]", str(value))
+    redacted = _BARE_BEARER_RE.sub(r"\1[REDACTED]", redacted)
     return _ASSIGNMENT_SECRET_RE.sub(
-        lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]",
+        lambda match: f"{match.group(1)}{match.group(2)}{match.group(3)}{match.group(4)}[REDACTED]",
         redacted,
     )
 
@@ -66,12 +71,24 @@ class MigrationChecksumError(MigrationError):
     pass
 
 
+class MediaDeletionError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class StoredMessage:
     inserted: bool
     message_id: int
     conversation_id: int
     attachment_ids: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class StoredAttachment:
+    inserted: bool
+    attachment_id: int
+    message_id: int
+    attachment_index: int
 
 
 class HistoryStore:
@@ -83,10 +100,16 @@ class HistoryStore:
         *,
         account_id: str = "default",
         migrations_dir: str | Path | None = None,
+        media_root: str | Path | None = None,
     ):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.account_id = str(account_id or "default")
+        self.media_root = (
+            Path(media_root)
+            if media_root is not None
+            else self.db_path.parent / "media"
+        )
         self.migrations_dir = (
             Path(migrations_dir)
             if migrations_dir is not None
@@ -210,19 +233,17 @@ class HistoryStore:
         sent_at: str,
         text: str,
     ) -> str:
-        provider_key = "|".join(
-            part
-            for part in (
-                str(provider_message_id or ""),
-                str(provider_cli_message_id or ""),
-                str(event_id or ""),
-            )
-            if part
-        )
-        if not provider_key:
-            provider_key = hashlib.sha256(
+        message_key = str(provider_message_id or "")
+        cli_message_key = str(provider_cli_message_id or "")
+        if message_key or cli_message_key:
+            provider_key = f"provider|{message_key}|{cli_message_key}"
+        elif event_id:
+            provider_key = f"event|{event_id}"
+        else:
+            fallback = hashlib.sha256(
                 f"{sender_id}|{sent_at}|{text}".encode("utf-8")
             ).hexdigest()
+            provider_key = f"fallback|{fallback}"
         material = (
             f"{self.account_id}|{thread_type}|{thread_id}|{provider_key}"
         )
@@ -258,6 +279,26 @@ class HistoryStore:
         ).fetchone()
         assert row is not None
         return int(row["id"])
+
+    def upsert_conversation(
+        self,
+        *,
+        thread_type: str,
+        thread_id: str,
+        title: str | None = None,
+        timestamp: str | None = None,
+    ) -> int:
+        normalized_type = self._thread_type(thread_type)
+        normalized_thread_id = str(thread_id or "")
+        if not normalized_thread_id:
+            raise ValueError("thread_id is required")
+        with self._lock, self.connection:
+            return self._conversation_id(
+                thread_type=normalized_type,
+                thread_id=normalized_thread_id,
+                title=title,
+                timestamp=str(timestamp or utc_now()),
+            )
 
     def store_message(
         self,
@@ -398,6 +439,101 @@ class HistoryStore:
             attachment_ids=tuple(attachment_ids),
         )
 
+    def insert_message(
+        self,
+        *,
+        thread_type: str,
+        thread_id: str,
+        sender_id: str,
+        text: str = "",
+        provider_message_id: str = "",
+        provider_cli_message_id: str = "",
+        event_id: str = "",
+        sender_name: str = "",
+        title: str | None = None,
+        is_bot: bool = False,
+        mentioned_bot: bool = False,
+        reply_to_provider_message_id: str = "",
+        quote: Mapping[str, Any] | None = None,
+        sent_at: str | None = None,
+        attachments: Sequence[Mapping[str, Any]] | None = None,
+        extra: Mapping[str, Any] | None = None,
+    ) -> StoredMessage:
+        return self.store_message(
+            thread_type=thread_type,
+            thread_id=thread_id,
+            sender_id=sender_id,
+            text=text,
+            provider_message_id=provider_message_id,
+            provider_cli_message_id=provider_cli_message_id,
+            event_id=event_id,
+            sender_name=sender_name,
+            title=title,
+            is_bot=is_bot,
+            mentioned_bot=mentioned_bot,
+            reply_to_provider_message_id=reply_to_provider_message_id,
+            quote=quote,
+            sent_at=sent_at,
+            attachments=attachments,
+            extra=extra,
+        )
+
+    def insert_attachment(
+        self,
+        *,
+        message_id: int,
+        attachment_index: int,
+        kind: str,
+        filename: str | None = None,
+        mime_type: str | None = None,
+        size_bytes: int | None = None,
+        remote_url: str | None = None,
+        local_path: str | None = None,
+        sha256: str | None = None,
+        download_status: str = "pending",
+        created_at: str | None = None,
+    ) -> StoredAttachment:
+        index = int(attachment_index)
+        if index < 0:
+            raise ValueError("attachment_index must be non-negative")
+        status = str(download_status).lower()
+        if status not in {"pending", "downloaded", "metadata_only", "failed"}:
+            raise ValueError("invalid attachment download_status")
+        with self._lock, self.connection:
+            cursor = self.connection.execute(
+                "INSERT OR IGNORE INTO attachments("
+                "message_id, attachment_index, kind, filename, mime_type, "
+                "size_bytes, remote_url, local_path, sha256, download_status, "
+                "created_at"
+                ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    int(message_id),
+                    index,
+                    str(kind or "other"),
+                    str(filename) if filename else None,
+                    str(mime_type) if mime_type else None,
+                    int(size_bytes) if size_bytes is not None else None,
+                    str(remote_url) if remote_url else None,
+                    str(local_path) if local_path else None,
+                    str(sha256) if sha256 else None,
+                    status,
+                    str(created_at or utc_now()),
+                ),
+            )
+            inserted = cursor.rowcount == 1
+            row = self.connection.execute(
+                "SELECT id FROM attachments "
+                "WHERE message_id=? AND attachment_index=?",
+                (int(message_id), index),
+            ).fetchone()
+            assert row is not None
+            return StoredAttachment(
+                inserted=inserted,
+                attachment_id=int(row["id"]),
+                message_id=int(message_id),
+                attachment_index=index,
+            )
+
     @staticmethod
     def _row(row: sqlite3.Row) -> dict[str, Any]:
         result = dict(row)
@@ -408,6 +544,185 @@ class HistoryStore:
                 except (TypeError, json.JSONDecodeError):
                     pass
         return result
+
+    @staticmethod
+    def _page(
+        limit: int,
+        offset: int,
+        *,
+        maximum: int = 100,
+    ) -> tuple[int, int]:
+        try:
+            requested_limit = int(limit)
+            start = int(offset)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("limit and offset must be integers") from exc
+        if start < 0:
+            raise ValueError("offset must not be negative")
+        return max(1, min(requested_limit, int(maximum))), start
+
+    def list_conversations(
+        self,
+        *,
+        thread_type: str | None = None,
+        query: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        capped, start = self._page(limit, offset, maximum=100)
+        clauses = ["c.account_id=?"]
+        params: list[Any] = [self.account_id]
+        if thread_type is not None and str(thread_type).strip():
+            clauses.append("c.thread_type=?")
+            params.append(self._thread_type(str(thread_type)))
+        if query is not None and str(query).strip():
+            clauses.append(
+                "(COALESCE(c.title, '') LIKE ? OR c.thread_id LIKE ? OR "
+                "EXISTS (SELECT 1 FROM messages query_message "
+                "WHERE query_message.conversation_id=c.id "
+                "AND query_message.text LIKE ?))"
+            )
+            pattern = f"%{str(query).strip()}%"
+            params.extend((pattern, pattern, pattern))
+        rows = self.connection.execute(
+            "SELECT c.*, COUNT(m.id) AS message_count "
+            "FROM conversations c "
+            "LEFT JOIN messages m ON m.conversation_id=c.id "
+            f"WHERE {' AND '.join(clauses)} "
+            "GROUP BY c.id "
+            "ORDER BY c.last_message_at DESC, c.id DESC LIMIT ? OFFSET ?",
+            [*params, capped + 1, start],
+        ).fetchall()
+        selected = rows[:capped]
+        return {
+            "items": [self._row(row) for row in selected],
+            "limit": capped,
+            "offset": start,
+            "next_offset": (
+                start + len(selected) if len(rows) > capped else None
+            ),
+        }
+
+    def get_conversation(self, conversation_id: int) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT c.*, COUNT(m.id) AS message_count "
+            "FROM conversations c "
+            "LEFT JOIN messages m ON m.conversation_id=c.id "
+            "WHERE c.account_id=? AND c.id=? GROUP BY c.id",
+            (self.account_id, int(conversation_id)),
+        ).fetchone()
+        return self._row(row) if row is not None else None
+
+    def page_messages(
+        self,
+        conversation_id: int,
+        *,
+        sender_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        query: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        capped, start = self._page(limit, offset, maximum=100)
+        clauses = ["c.account_id=?", "c.id=?"]
+        params: list[Any] = [self.account_id, int(conversation_id)]
+        if sender_id is not None and str(sender_id).strip():
+            clauses.append("m.sender_id=?")
+            params.append(str(sender_id).strip())
+        if since is not None and str(since).strip():
+            clauses.append("m.sent_at>=?")
+            params.append(str(since))
+        if until is not None and str(until).strip():
+            clauses.append("m.sent_at<=?")
+            params.append(str(until))
+        if query is not None and str(query).strip():
+            clauses.append("m.text LIKE ?")
+            params.append(f"%{str(query).strip()}%")
+        rows = self.connection.execute(
+            "SELECT m.*, c.thread_type, c.thread_id, c.title "
+            "FROM messages m JOIN conversations c ON c.id=m.conversation_id "
+            f"WHERE {' AND '.join(clauses)} "
+            "ORDER BY m.sent_at DESC, m.id DESC LIMIT ? OFFSET ?",
+            [*params, capped + 1, start],
+        ).fetchall()
+        selected = rows[:capped]
+        message_ids = [int(row["id"]) for row in selected]
+        attachments: dict[int, list[dict[str, Any]]] = {
+            message_id: [] for message_id in message_ids
+        }
+        if message_ids:
+            placeholders = ",".join("?" for _ in message_ids)
+            attachment_rows = self.connection.execute(
+                "SELECT * FROM attachments "
+                f"WHERE message_id IN ({placeholders}) "
+                "ORDER BY message_id, attachment_index",
+                message_ids,
+            ).fetchall()
+            for attachment in attachment_rows:
+                attachments[int(attachment["message_id"])].append(
+                    self._row(attachment)
+                )
+        items: list[dict[str, Any]] = []
+        for row in reversed(selected):
+            item = self._row(row)
+            item["attachments"] = attachments[int(row["id"])]
+            items.append(item)
+        return {
+            "items": items,
+            "limit": capped,
+            "offset": start,
+            "next_offset": (
+                start + len(selected) if len(rows) > capped else None
+            ),
+        }
+
+    def page_tool_activity(
+        self,
+        *,
+        requester_id: str | None = None,
+        tool_name: str | None = None,
+        status: str | None = None,
+        thread_type: str | None = None,
+        thread_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        capped, start = self._page(limit, offset, maximum=100)
+        clauses = ["1=1"]
+        params: list[Any] = []
+        for column, value in (
+            ("requester_id", requester_id),
+            ("tool_name", tool_name),
+            ("status", status),
+            ("thread_type", thread_type),
+            ("thread_id", thread_id),
+        ):
+            if value is not None and str(value).strip():
+                clauses.append(f"{column}=?")
+                params.append(str(value).strip())
+        if since is not None and str(since).strip():
+            clauses.append("occurred_at>=?")
+            params.append(str(since))
+        if until is not None and str(until).strip():
+            clauses.append("occurred_at<=?")
+            params.append(str(until))
+        rows = self.connection.execute(
+            f"SELECT * FROM tool_activity WHERE {' AND '.join(clauses)} "
+            "ORDER BY occurred_at DESC, id DESC LIMIT ? OFFSET ?",
+            [*params, capped + 1, start],
+        ).fetchall()
+        selected = rows[:capped]
+        return {
+            "items": [self._row(row) for row in selected],
+            "limit": capped,
+            "offset": start,
+            "next_offset": (
+                start + len(selected) if len(rows) > capped else None
+            ),
+        }
 
     def recent_messages(
         self,
@@ -430,6 +745,57 @@ class HistoryStore:
             ),
         ).fetchall()
         return [self._row(row) for row in reversed(rows)]
+
+    def contact_cards_before(
+        self,
+        *,
+        message_id: int,
+        thread_type: str,
+        thread_id: str,
+        multiple: bool,
+    ) -> list[dict[str, Any]]:
+        """Find contact cards before a command in one conversation.
+
+        A single-card lookup skips ordinary messages and returns the nearest
+        preceding contact. A multiple-card lookup returns only the contiguous
+        contact-card run immediately before the command. Results are ordered
+        from oldest to newest so callers can process a batch predictably.
+        """
+        rows = self.connection.execute(
+            "SELECT m.id, m.sender_id, m.extra_json "
+            "FROM messages m JOIN conversations c ON c.id=m.conversation_id "
+            "WHERE c.account_id=? AND c.thread_type=? AND c.thread_id=? "
+            "AND m.id<? ORDER BY m.id DESC",
+            (
+                self.account_id,
+                self._thread_type(thread_type),
+                str(thread_id),
+                int(message_id),
+            ),
+        ).fetchall()
+        selected: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                extra = json.loads(row["extra_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                extra = {}
+            contact = extra.get("contact") if isinstance(extra, dict) else None
+            if not isinstance(contact, dict):
+                if multiple:
+                    break
+                continue
+            selected.append(
+                {
+                    "message_id": int(row["id"]),
+                    "sender_id": str(row["sender_id"]),
+                    "name": str(contact.get("name") or ""),
+                    "phone": str(contact.get("phone") or ""),
+                    "gUid": str(contact.get("gUid") or ""),
+                }
+            )
+            if not multiple:
+                break
+        return list(reversed(selected))
 
     @staticmethod
     def _scope_sql(
@@ -554,20 +920,41 @@ class HistoryStore:
         event_key: str,
         event_type: str,
         provider_message_id: str = "",
+        thread_type: str | None = None,
+        thread_id: str | None = None,
         actor_id: str = "",
         actor_name: str = "",
         occurred_at: str | None = None,
         payload: Mapping[str, Any] | None = None,
     ) -> bool:
         timestamp = str(occurred_at or utc_now())
+        if (thread_type is None) != (thread_id is None):
+            raise ValueError("thread_type and thread_id must be provided together")
         with self._lock, self.connection:
             message = None
             if provider_message_id:
-                message = self.connection.execute(
-                    "SELECT id FROM messages WHERE provider_message_id=? "
-                    "ORDER BY id DESC LIMIT 1",
-                    (str(provider_message_id),),
-                ).fetchone()
+                if thread_type is not None and thread_id is not None:
+                    message = self.connection.execute(
+                        "SELECT m.id FROM messages m "
+                        "JOIN conversations c ON c.id=m.conversation_id "
+                        "WHERE c.account_id=? AND c.thread_type=? "
+                        "AND c.thread_id=? AND m.provider_message_id=? "
+                        "ORDER BY m.id DESC LIMIT 1",
+                        (
+                            self.account_id,
+                            self._thread_type(thread_type),
+                            str(thread_id),
+                            str(provider_message_id),
+                        ),
+                    ).fetchone()
+                else:
+                    message = self.connection.execute(
+                        "SELECT m.id FROM messages m "
+                        "JOIN conversations c ON c.id=m.conversation_id "
+                        "WHERE c.account_id=? AND m.provider_message_id=? "
+                        "ORDER BY m.id DESC LIMIT 1",
+                        (self.account_id, str(provider_message_id)),
+                    ).fetchone()
             cursor = self.connection.execute(
                 "INSERT OR IGNORE INTO message_events("
                 "message_id, event_key, event_type, actor_id, actor_name, "
@@ -594,6 +981,31 @@ class HistoryStore:
                     (timestamp, int(message["id"])),
                 )
             return inserted
+
+    def insert_event(
+        self,
+        *,
+        event_key: str,
+        event_type: str,
+        provider_message_id: str = "",
+        thread_type: str | None = None,
+        thread_id: str | None = None,
+        actor_id: str = "",
+        actor_name: str = "",
+        occurred_at: str | None = None,
+        payload: Mapping[str, Any] | None = None,
+    ) -> bool:
+        return self.record_event(
+            event_key=event_key,
+            event_type=event_type,
+            provider_message_id=provider_message_id,
+            thread_type=thread_type,
+            thread_id=thread_id,
+            actor_id=actor_id,
+            actor_name=actor_name,
+            occurred_at=occurred_at,
+            payload=payload,
+        )
 
     def log_tool_activity(
         self,
@@ -637,6 +1049,8 @@ class HistoryStore:
         *,
         thread_type: str | None,
         thread_id: str | None,
+        sender_id: str | None,
+        query: str | None,
         since: str | None,
         until: str | None,
     ) -> tuple[str, list[Any]]:
@@ -648,6 +1062,12 @@ class HistoryStore:
         if thread_id is not None:
             clauses.append("c.thread_id=?")
             params.append(str(thread_id))
+        if sender_id is not None:
+            clauses.append("m.sender_id=?")
+            params.append(str(sender_id))
+        if query is not None:
+            clauses.append("m.text LIKE ?")
+            params.append(f"%{str(query)}%")
         if since is not None:
             clauses.append("m.sent_at>=?")
             params.append(str(since))
@@ -662,12 +1082,16 @@ class HistoryStore:
         *,
         thread_type: str | None = None,
         thread_id: str | None = None,
+        sender_id: str | None = None,
+        query: str | None = None,
         since: str | None = None,
         until: str | None = None,
     ) -> dict[str, Any]:
         where, params = self._history_filter(
             thread_type=thread_type,
             thread_id=thread_id,
+            sender_id=sender_id,
+            query=query,
             since=since,
             until=until,
         )
@@ -699,16 +1123,20 @@ class HistoryStore:
         *,
         thread_type: str | None = None,
         thread_id: str | None = None,
+        sender_id: str | None = None,
+        query: str | None = None,
         since: str | None = None,
         until: str | None = None,
     ) -> dict[str, Any]:
         where, params = self._history_filter(
             thread_type=thread_type,
             thread_id=thread_id,
+            sender_id=sender_id,
+            query=query,
             since=since,
             until=until,
         )
-        local_paths: list[Path] = []
+        media_deleted = 0
         with self._lock, self.connection:
             rows = self.connection.execute(
                 "SELECT m.id FROM messages m "
@@ -725,12 +1153,25 @@ class HistoryStore:
                 f"WHERE message_id IN ({placeholders})",
                 message_ids,
             ).fetchall()
-            local_paths = [
-                Path(row["local_path"])
-                for row in attachment_rows
-                if row["local_path"]
-            ]
+            media_root = self.media_root.resolve(strict=False)
+            local_paths: list[Path] = []
+            for row in attachment_rows:
+                if not row["local_path"]:
+                    continue
+                candidate = Path(row["local_path"]).resolve(strict=False)
+                if candidate != media_root and media_root in candidate.parents:
+                    local_paths.append(candidate)
             attachment_count = len(attachment_rows)
+            for path in local_paths:
+                existed = path.exists() or path.is_symlink()
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    raise MediaDeletionError(
+                        "media deletion failed; history was kept for retry"
+                    ) from exc
+                if existed:
+                    media_deleted += 1
             self.connection.execute(
                 f"DELETE FROM messages WHERE id IN ({placeholders})",
                 message_ids,
@@ -742,18 +1183,14 @@ class HistoryStore:
                 ")",
                 (self.account_id,),
             )
-        media_deleted = 0
-        for path in local_paths:
-            try:
-                path.unlink(missing_ok=True)
-                media_deleted += 1
-            except OSError:
-                pass
         return {
             "messages": len(message_ids),
             "attachments": attachment_count,
             "media_deleted": media_deleted,
         }
+
+    def purge_before(self, cutoff: str) -> dict[str, Any]:
+        return self.delete_history(until=str(cutoff))
 
     def stats(self) -> dict[str, int]:
         result: dict[str, int] = {}

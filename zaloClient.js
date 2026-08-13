@@ -6,6 +6,22 @@ import fs from "node:fs";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import { Zalo, ThreadType, LoginQRCallbackEventType, Reactions } from "zca-js";
+import { redactSecrets, safeError } from "./bridge/redaction.js";
+
+function safeLogValue(value) {
+  if (value instanceof Error) return safeError(value);
+  const redacted = redactSecrets(value);
+  if (redacted !== null && typeof redacted === "object") {
+    return JSON.stringify(redacted);
+  }
+  return redacted;
+}
+
+const safeConsole = Object.freeze({
+  log: (...values) => console.log(...values.map(safeLogValue)),
+  warn: (...values) => console.warn(...values.map(safeLogValue)),
+  error: (...values) => console.error(...values.map(safeLogValue)),
+});
 
 const DEFAULT_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0";
@@ -178,7 +194,7 @@ export class ZaloClient extends EventEmitter {
     // If we're in a backoff window, serve stale cache rather than hammering.
     if (now < this._infoBackoffUntil) {
       if (hit) {
-        console.warn(`[zalo] info backoff active; serving stale cache for ${key}`);
+        safeConsole.warn(`[zalo] info backoff active; serving stale cache for ${key}`);
         return hit.value;
       }
       const waitS = Math.ceil((this._infoBackoffUntil - now) / 1000);
@@ -201,7 +217,7 @@ export class ZaloClient extends EventEmitter {
         if (this._isRateLimitError(e)) {
           this._infoBackoffMs = Math.min(this._infoBackoffMs ? this._infoBackoffMs * 2 : 5000, 300000);
           this._infoBackoffUntil = Date.now() + this._infoBackoffMs;
-          console.warn(`[zalo] rate-limit suspected on ${key}; backing off ${this._infoBackoffMs}ms`);
+          safeConsole.warn(`[zalo] rate-limit suspected on ${key}; backing off ${this._infoBackoffMs}ms`);
           if (hit) return hit.value; // serve stale on limit
         }
         throw e;
@@ -220,7 +236,7 @@ export class ZaloClient extends EventEmitter {
         if (c && c.cookie && c.imei && c.userAgent) return c;
       }
     } catch (e) {
-      console.error("[zalo] failed to read credentials:", e.message);
+      safeConsole.error("[zalo] failed to read credentials:", e);
     }
     return null;
   }
@@ -228,10 +244,21 @@ export class ZaloClient extends EventEmitter {
   _saveCredentials(cred) {
     try {
       fs.mkdirSync(path.dirname(this.credentialsPath), { recursive: true });
-      fs.writeFileSync(this.credentialsPath, JSON.stringify(cred, null, 2), "utf-8");
-      console.log("[zalo] credentials saved to", this.credentialsPath);
+      const temporaryPath = this.credentialsPath + ".tmp-" + process.pid;
+      fs.writeFileSync(
+        temporaryPath,
+        JSON.stringify(cred, null, 2),
+        { encoding: "utf-8", mode: 0o600 },
+      );
+      fs.renameSync(temporaryPath, this.credentialsPath);
+      try {
+        fs.chmodSync(this.credentialsPath, 0o600);
+      } catch {
+        // Best effort on Windows.
+      }
+      safeConsole.log("[zalo] credentials saved");
     } catch (e) {
-      console.error("[zalo] failed to save credentials:", e.message);
+      safeConsole.error("[zalo] failed to save credentials:", e);
     }
   }
 
@@ -278,7 +305,7 @@ export class ZaloClient extends EventEmitter {
       }
       this._cliMsgStream.write(JSON.stringify({ m: key, c: String(cliMsgId), t: ts }) + "\n");
     } catch (e) {
-      console.error("[zalo] cliMsgId persist failed:", e.message);
+      safeConsole.error("[zalo] cliMsgId persist failed:", e);
     }
   }
 
@@ -317,9 +344,9 @@ export class ZaloClient extends EventEmitter {
           }
         }
       }
-      if (loaded) console.log(`[zalo] loaded ${loaded} cached cliMsgId mappings (<=30d)`);
+      if (loaded) safeConsole.log(`[zalo] loaded ${loaded} cached cliMsgId mappings (<=30d)`);
     } catch (e) {
-      console.error("[zalo] cliMsgId cache load failed:", e.message);
+      safeConsole.error("[zalo] cliMsgId cache load failed:", e);
     }
   }
 
@@ -333,14 +360,14 @@ export class ZaloClient extends EventEmitter {
         if (m && m[1] < cutoffDay) {
           try {
             fs.unlinkSync(path.join(this._cliMsgDir, f));
-            console.log("[zalo] pruned old cliMsgId file:", f);
+            safeConsole.log("[zalo] pruned old cliMsgId file:", f);
           } catch {
             /* ignore */
           }
         }
       }
     } catch (e) {
-      console.error("[zalo] cliMsgId prune failed:", e.message);
+      safeConsole.error("[zalo] cliMsgId prune failed:", e);
     }
   }
 
@@ -392,16 +419,16 @@ export class ZaloClient extends EventEmitter {
     const saved = forceQR ? null : this._loadCredentials();
     if (saved) {
       try {
-        console.log("[zalo] logging in with saved credentials...");
+        safeConsole.log("[zalo] logging in with saved credentials...");
         this.api = await zalo.login(saved);
         await this._afterLogin();
         return { method: "cookie" };
       } catch (e) {
-        console.error("[zalo] cookie login failed:", e.message);
+        safeConsole.error("[zalo] cookie login failed:", e);
         // Headless auto-relogin must NOT drop into an interactive QR flow that
         // would block forever in a service. Surface the failure to the caller.
         if (cookieOnly) throw e;
-        console.error("[zalo] falling back to QR.");
+        safeConsole.error("[zalo] falling back to QR.");
       }
     } else if (cookieOnly) {
       throw new Error("cookie relogin requested but no saved credentials");
@@ -410,7 +437,7 @@ export class ZaloClient extends EventEmitter {
     // QR login. Renders a scannable QR + live countdown in the terminal when
     // stdout is a TTY (interactive `login`/`setup`); a background service (no
     // TTY) just logs one line so its log files stay clean.
-    console.log("[zalo] starting QR login...");
+    safeConsole.log("[zalo] starting QR login...");
     this._qrState = { status: "generating", image: null };
 
     const tty = !!process.stdout.isTTY;
@@ -439,17 +466,17 @@ export class ZaloClient extends EventEmitter {
     };
     const showQr = async (token) => {
       if (!tty) {
-        console.log("[zalo] QR generated. Scan", this.qrPath, "with the Zalo app.");
+        safeConsole.log("[zalo] QR generated. Scan", this.qrPath, "with the Zalo app.");
         return;
       }
       if (qrterm === null) {
         try { qrterm = (await import("qrcode-terminal")).default; } catch { qrterm = false; }
       }
       const finishWith = (qrText) => {
-        console.log("");
-        if (qrText) console.log(qrText);
-        console.log("  📱 Open Zalo → (+) → Scan QR code, point your phone at the screen");
-        console.log(`  (fallback) or open the image: ${this.qrPath}`);
+        safeConsole.log("");
+        if (qrText) safeConsole.log(qrText);
+        safeConsole.log("  📱 Open Zalo → (+) → Scan QR code, point your phone at the screen");
+        safeConsole.log(`  (fallback) or open the image: ${this.qrPath}`);
         startCountdown();
       };
       if (qrterm) qrterm.generate(token, { small: true }, finishWith);
@@ -494,12 +521,12 @@ export class ZaloClient extends EventEmitter {
               displayName: event.data.display_name,
             };
             stopCountdown(`  ✓ Scanned by ${event.data.display_name} — confirm on your phone…`);
-            if (!tty) console.log("[zalo] QR scanned by", event.data.display_name, "- confirm on phone.");
+            if (!tty) safeConsole.log("[zalo] QR scanned by", event.data.display_name, "- confirm on phone.");
             break;
           case LoginQRCallbackEventType.QRCodeExpired:
             this._qrState = { status: "expired", image: null };
             stopCountdown("  ⏳ QR expired — generating a new one…");
-            if (!tty) console.log("[zalo] QR expired; regenerating.");
+            if (!tty) safeConsole.log("[zalo] QR expired; regenerating.");
             try { event.actions?.retry?.(); } catch {
               /* ignore */
             }
@@ -507,7 +534,7 @@ export class ZaloClient extends EventEmitter {
           case LoginQRCallbackEventType.QRCodeDeclined:
             this._qrState = { status: "declined", image: null };
             stopCountdown("  ✗ Declined on your phone — generating a new one…");
-            if (!tty) console.log("[zalo] QR login declined; regenerating.");
+            if (!tty) safeConsole.log("[zalo] QR login declined; regenerating.");
             try { event.actions?.retry?.(); } catch {
               /* ignore */
             }
@@ -538,7 +565,7 @@ export class ZaloClient extends EventEmitter {
     } catch {
       this.ownId = null;
     }
-    console.log("[zalo] logged in. ownId =", this.ownId);
+    safeConsole.log("[zalo] logged in. ownId =", this.ownId);
     this._wireListeners();
     // retryOnClose: zca-js auto-reconnects the Zalo websocket on drop.
     this.api.listener.start({ retryOnClose: true });
@@ -559,7 +586,7 @@ export class ZaloClient extends EventEmitter {
       Promise.resolve()
         .then(() => api.keepAlive())
         .catch((e) =>
-          console.warn("[zalo] keepAlive failed:", e && e.message ? e.message : e),
+          safeConsole.warn("[zalo] keepAlive failed:", e),
         );
     }, KEEPALIVE_INTERVAL_MS);
     if (this._keepAliveTimer.unref) this._keepAliveTimer.unref();
@@ -618,7 +645,7 @@ export class ZaloClient extends EventEmitter {
     this._autoReloginAttempts++;
     const attempt = this._autoReloginAttempts;
     const delay = Math.min(attempt * AUTO_RELOGIN_BASE_MS, AUTO_RELOGIN_MAX_MS);
-    console.log(
+    safeConsole.log(
       `[zalo] auto-relogin attempt ${attempt}/${MAX_AUTO_RELOGIN_ATTEMPTS} ` +
         `in ${Math.round(delay / 1000)}s (code=${code})`,
     );
@@ -627,14 +654,14 @@ export class ZaloClient extends EventEmitter {
       this._autoReloginTimer = null;
       this.relogin({ forceQR: false, cookieOnly: true })
         .then((r) => {
-          console.log("[zalo] auto-relogin succeeded via", r.method);
+          safeConsole.log("[zalo] auto-relogin succeeded via", r.method);
           this._reconnecting = false;
           // The fresh listener's "connected" event resets _autoReloginAttempts.
         })
         .catch((e) => {
-          console.error(
+          safeConsole.error(
             "[zalo] auto-relogin failed:",
-            e && e.message ? e.message : e,
+            e,
           );
           this._reconnecting = false;
           if (this._autoReloginAttempts >= MAX_AUTO_RELOGIN_ATTEMPTS) {
@@ -651,7 +678,7 @@ export class ZaloClient extends EventEmitter {
     const listener = this.api.listener;
 
     listener.on("connected", () => {
-      console.log("[zalo] listener connected");
+      safeConsole.log("[zalo] listener connected");
       this.sessionDead = false;
       // A healthy connection replenishes the auto-relogin budget so periodic
       // drops don't slowly exhaust it over the session's lifetime.
@@ -661,7 +688,7 @@ export class ZaloClient extends EventEmitter {
     });
     listener.on("disconnected", (code, reason) => {
       // Transient drop; zca-js will auto-retry (retryOnClose). Just surface it.
-      console.log("[zalo] listener disconnected", code, reason);
+      safeConsole.log("[zalo] listener disconnected", code, reason);
       this.emit("status", { connected: false, transient: true, code, reason });
     });
     listener.on("closed", (code, reason) => {
@@ -669,7 +696,7 @@ export class ZaloClient extends EventEmitter {
       // 3000 = DuplicateConnection (logged in elsewhere), 3003 = KickConnection
       // are terminal — re-scanning QR is the only recovery, so don't auto-retry.
       // Anything else (cookie/network) gets an automatic cookie relogin first.
-      console.log("[zalo] listener CLOSED", code, reason);
+      safeConsole.log("[zalo] listener CLOSED", code, reason);
       this.loggedIn = false;
       this._stopKeepAlive();
       const fatal = code === 3000 || code === 3003;
@@ -680,7 +707,7 @@ export class ZaloClient extends EventEmitter {
       }
     });
     listener.on("error", (err) => {
-      console.error("[zalo] listener error:", err);
+      safeConsole.error("[zalo] listener error:", err);
     });
 
     listener.on("message", (message) => {
@@ -691,15 +718,22 @@ export class ZaloClient extends EventEmitter {
         if (d.msgId && d.cliMsgId) {
           this._recordCliMsgId(d.msgId, d.cliMsgId);
         }
-        console.log(
-          `[zalo] RAW message: type=${isGroup ? "group" : "user"} thread=${message.threadId} ` +
-            `from=${d.uidFrom} self=${message.isSelf} msgType=${d.msgType} ` +
-            `content=${typeof d.content === "string" ? JSON.stringify(d.content).slice(0, 80) : JSON.stringify(d.content).slice(0, 400)}`,
+        safeConsole.log(
+          "[zalo] message: type=" +
+            (isGroup ? "group" : "user") +
+            " thread=" +
+            message.threadId +
+            " from=" +
+            d.uidFrom +
+            " self=" +
+            message.isSelf +
+            " msgType=" +
+            d.msgType,
         );
         const ev = this._normaliseMessage(message);
         if (ev) this.emit("message", ev);
       } catch (e) {
-        console.error("[zalo] failed to normalise message:", e.message);
+        safeConsole.error("[zalo] failed to normalise message:", e);
       }
     });
 
@@ -717,7 +751,7 @@ export class ZaloClient extends EventEmitter {
           isSelf: !!reaction.isSelf,
         });
       } catch (e) {
-        console.error("[zalo] reaction normalise failed:", e.message);
+        safeConsole.error("[zalo] reaction normalise failed:", e);
       }
     });
 
@@ -733,7 +767,7 @@ export class ZaloClient extends EventEmitter {
           isSelf: !!undo.isSelf,
         });
       } catch (e) {
-        console.error("[zalo] undo normalise failed:", e.message);
+        safeConsole.error("[zalo] undo normalise failed:", e);
       }
     });
 
@@ -742,7 +776,7 @@ export class ZaloClient extends EventEmitter {
       try {
         this.emit("friend_event", { type: ev.type, data: ev.data, isSelf: !!ev.isSelf });
       } catch (e) {
-        console.error("[zalo] friend_event failed:", e.message);
+        safeConsole.error("[zalo] friend_event failed:", e);
       }
     });
 
@@ -751,7 +785,7 @@ export class ZaloClient extends EventEmitter {
       try {
         this.emit("group_event", { type: ev.type, data: ev.data, isSelf: !!ev.isSelf });
       } catch (e) {
-        console.error("[zalo] group_event failed:", e.message);
+        safeConsole.error("[zalo] group_event failed:", e);
       }
     });
   }
@@ -958,8 +992,113 @@ export class ZaloClient extends EventEmitter {
     return await this._cachedInfo("groups:all", () => this.api.getAllGroups());
   }
   async getGroupMembers(groupId) {
-    // getGroupInfo returns membership; getGroupMembersInfo enriches profiles.
-    return await this.api.getGroupInfo(String(groupId));
+    const id = String(groupId);
+    const info = await this.api.getGroupInfo(id);
+    const group = info?.gridInfoMap?.[id] || {};
+    const currentMems = Array.isArray(group.currentMems) ? group.currentMems : [];
+    const memberIds = Array.isArray(group.memberIds) ? group.memberIds : [];
+    const memVerList = Array.isArray(group.memVerList) ? group.memVerList : [];
+    const normalizeId = (value) =>
+      String(value ?? "").trim().replace(/_\d+$/, "");
+    const displayNameOf = (value) =>
+      value && typeof value === "object"
+        ? value.displayName || value.zaloName || value.name || value.dName || ""
+        : "";
+    const memberById = new Map();
+
+    const addMember = (item, preferToken = false) => {
+      const rawToken =
+        item && typeof item === "object"
+          ? item.id || item.userId || item.uid || item.memberId
+          : item;
+      const token = String(rawToken ?? "").trim();
+      const memberId = normalizeId(token);
+      if (!memberId) return;
+      const name = displayNameOf(item);
+      const existing = memberById.get(memberId);
+      if (!existing) {
+        memberById.set(memberId, {
+          id: memberId,
+          token,
+          name: name || memberId,
+        });
+        return;
+      }
+      if (preferToken) existing.token = token;
+      if (name && existing.name === memberId) existing.name = name;
+    };
+
+    for (const item of memberIds) addMember(item);
+    for (const item of currentMems) addMember(item);
+    for (const item of memVerList) addMember(item, true);
+
+    const members = [...memberById.values()];
+    const tokens = members.map((member) => member.token);
+
+    if (tokens.length === 0) {
+      return [];
+    }
+
+    let profiles = {};
+    if (typeof this.api.getGroupMembersInfo === "function") {
+      try {
+        const enriched = await this.api.getGroupMembersInfo(tokens);
+        const groupProfiles = enriched?.profiles || enriched?.changed_profiles;
+        if (groupProfiles && typeof groupProfiles === "object") {
+          profiles = groupProfiles;
+        }
+      } catch (error) {
+        safeConsole.warn("[zalo] getGroupMembersInfo failed:", error);
+      }
+    }
+
+    const profileByMember = new Map();
+    const addProfiles = (source) => {
+      const profileEntries = Array.isArray(source)
+        ? source.map((profile) => ["", profile])
+        : source && typeof source === "object"
+          ? Object.entries(source)
+          : [];
+      for (const [key, profile] of profileEntries) {
+        if (!profile || typeof profile !== "object") continue;
+        for (const candidate of [key, profile.id, profile.userId, profile.uid]) {
+          const token = String(candidate ?? "").trim();
+          if (!token) continue;
+          profileByMember.set(token, profile);
+          const profileId = normalizeId(token);
+          if (profileId) profileByMember.set(profileId, profile);
+        }
+      }
+    };
+    addProfiles(profiles);
+
+    const unresolvedTokens = members
+      .filter(
+        (member) =>
+          !profileByMember.has(member.token) && !profileByMember.has(member.id),
+      )
+      .map((member) => member.token);
+    if (unresolvedTokens.length && typeof this.api.getUserInfo === "function") {
+      try {
+        const fallback = await this.api.getUserInfo(unresolvedTokens);
+        addProfiles(
+          fallback?.changed_profiles ||
+            fallback?.profiles ||
+            fallback?.unchanged_profiles,
+        );
+      } catch (error) {
+        safeConsole.warn("[zalo] getUserInfo member enrichment failed:", error);
+      }
+    }
+
+    return members.map((member) => {
+      const profile =
+        profileByMember.get(member.token) || profileByMember.get(member.id);
+      return {
+        id: member.id,
+        name: displayNameOf(profile) || member.name || member.id,
+      };
+    });
   }
   async createGroup(name, members) {
     return await this.api.createGroup({ name: name || undefined, members: members.map(String) });
@@ -1079,27 +1218,50 @@ export class ZaloClient extends EventEmitter {
           );
           map = (info && info.gridInfoMap) || {};
         } catch (e) {
-          console.warn(`[zalo] getGroupInfo chunk failed (${slice.length} ids): ${e.message}`);
+          safeConsole.warn("[zalo] getGroupInfo chunk failed:", e);
         }
         for (const id of slice) {
           const g = map[id] || {};
-          groups.push({ id: String(id), name: g.name || g.groupName || `(group ${id})` });
+          const rawMemberCount = g.totalMember ?? g.memberCount ?? g.totalMemberCount;
+          const numericMemberCount = Number(rawMemberCount);
+          const listedMemberCounts = [g.currentMems, g.memberIds, g.memVerList]
+            .filter(Array.isArray)
+            .map((members) => members.length);
+          const fallbackMemberCount = listedMemberCounts.length
+            ? Math.max(...listedMemberCounts)
+            : undefined;
+          const memberCount =
+            rawMemberCount !== undefined &&
+            rawMemberCount !== null &&
+            Number.isFinite(numericMemberCount)
+              ? numericMemberCount
+              : fallbackMemberCount;
+          const group = {
+            id: String(id),
+            name: g.name || g.groupName || `(group ${id})`,
+          };
+          if (Number.isFinite(memberCount)) group.memberCount = memberCount;
+          groups.push(group);
         }
       }
     } catch (e) {
-      console.error("[zalo] listContacts groups failed:", e.message);
+      safeConsole.error("[zalo] listContacts groups failed:", e);
     }
     // Friends: getAllFriends already returns objects with userId + displayName.
     try {
       const fr = await this.getAllFriends();
       for (const f of Array.isArray(fr) ? fr : []) {
-        friends.push({
+        const friend = {
           id: String(f.userId || f.uid || f.id || ""),
           name: f.displayName || f.zaloName || f.username || "(friend)",
-        });
+        };
+        for (const key of ["friendStatus", "isFr", "accountStatus"]) {
+          if (f[key] !== undefined && f[key] !== null) friend[key] = f[key];
+        }
+        friends.push(friend);
       }
     } catch (e) {
-      console.error("[zalo] listContacts friends failed:", e.message);
+      safeConsole.error("[zalo] listContacts friends failed:", e);
     }
     return { groups, friends };
   }
@@ -1163,7 +1325,7 @@ export class ZaloClient extends EventEmitter {
       /* ignore */
     }
     this.loggedIn = false;
-    console.log("[zalo] client shut down");
+    safeConsole.log("[zalo] client shut down");
   }
 }
 

@@ -18,7 +18,11 @@ Thiết kế ưu tiên sự đơn giản. Không có approval broker, mã duyệ
 
 - Plugin Zalo: tag `v1.0.9`, commit `b30cf000e62a02f5da304d17556e28ddcb2d4ca2`.
 - Thư viện Zalo: `zca-js@2.1.2`.
-- Hermes Agent: `0.19.0`.
+- Hermes Agent: `0.19.0` tại commit bất biến
+  `eb52760564dbba2e5971fa54bd67384e281cd3b8`.
+- Contract Hermes bắt buộc: `PlatformEntry.env_enablement_fn` và
+  `MessageEvent.channel_context`; checkout khác cùng nhãn version nhưng thiếu
+  contract không được coi là tương thích.
 - Môi trường triển khai: Ubuntu 22.04 hoặc 24.04, Node.js 22, Python 3.11 và systemd.
 - Mô hình: một công ty, một tài khoản Zalo, một Hermes Agent và một VPS.
 
@@ -29,14 +33,26 @@ Thiết kế ưu tiên sự đơn giản. Không có approval broker, mã duyệ
 3. Trong group, bot chỉ gọi Hermes khi một thành viên trong allowlist mention bot.
 4. Chat riêng của mỗi thành viên có session và lịch sử riêng.
 5. Mỗi group có một session chung.
-6. Mọi thành viên trong allowlist dùng tool Hermes và chức năng Zalo ngay, không cần approval.
-7. Một tool Zalo đa năng cung cấp `list`, `describe` và `call` cho toàn bộ bề mặt `zca-js`.
-8. Admin có toàn bộ quyền của thành viên và thêm quyền quản trị bot.
-9. Mọi thành viên được đọc memory chung; chỉ admin được thêm, sửa hoặc xóa memory chung.
-10. Cookie, token, API key, mật khẩu và session context không được trả qua chat hoặc ghi vào log.
-11. Media không quá 20 MiB được tải và lưu; media lớn hơn chỉ lưu metadata và URL.
-12. Hội thoại được giữ lâu dài cho tới khi admin xuất hoặc xóa.
-13. Khi gọi Hermes, group nhận 100 tin nhắn gần nhất; lịch sử cũ được truy vấn bằng tool tìm kiếm.
+6. Phiên bản hiện tại chấp nhận rủi ro khi các lượt xử lý đồng thời trong session
+   group chung có thể kế thừa nhầm context/quyền admin của lượt trước. Không sửa
+   Hermes core và không tách session theo từng thành viên để loại bỏ rủi ro này.
+   Admin nên thực hiện thao tác memory đặc quyền trong chat riêng.
+7. Mọi thành viên trong allowlist dùng tool Hermes và chức năng Zalo ngay, không cần approval.
+8. Một tool Zalo đa năng cung cấp `list`, `describe` và `call` cho toàn bộ bề mặt `zca-js`.
+9. Admin có toàn bộ quyền của thành viên và thêm quyền quản trị bot.
+10. Mọi thành viên được đọc memory chung; chỉ admin được thêm, sửa hoặc xóa memory chung.
+11. Cookie, token, API key, mật khẩu và session context không được trả qua chat hoặc ghi vào log.
+12. Media không quá 20 MiB được tải và lưu; media lớn hơn chỉ lưu metadata và URL.
+13. Hội thoại được giữ lâu dài cho tới khi admin xuất hoặc xóa.
+14. Khi gọi Hermes, group nhận 100 tin nhắn gần nhất; lịch sử cũ được truy vấn bằng tool tìm kiếm.
+15. Workflow kết bạn bằng danh thiếp là thao tác đặc quyền của admin: bot chỉ thực hiện
+    khi admin ra lệnh sau một hoặc nhiều danh thiếp trong cùng DM/group; workflow chỉ
+    gửi lời mời kết bạn và không tự thêm người nhận vào `allowed_users`.
+16. Mọi thành viên trong `allowed_users` được tìm kiếm và đọc lịch sử của tất cả
+    group trong `allowed_groups`, kể cả khi hỏi từ DM/group khác. Họ không được
+    đọc DM người khác, export/xóa history, đổi retention hoặc dùng quyền quản trị.
+17. CI phải checkout đúng Hermes commit mục tiêu, kiểm tra hai contract, đăng ký
+    plugin và chạy toàn bộ Python/integration suite trước official release.
 
 ## 4. Mục tiêu
 
@@ -161,6 +177,7 @@ Admin được toàn bộ quyền của thành viên và thêm:
 - Export hoặc xóa lịch sử theo DM/group/khoảng thời gian.
 - Login lại QR và quản lý service.
 - Sửa cấu hình bot/Hermes.
+- Ra lệnh kết bạn bằng danh thiếp trong DM hoặc group; trong group phải mention bot.
 
 Hệ thống không cho xóa admin cuối cùng để tránh mất quyền quản trị.
 
@@ -225,6 +242,39 @@ show_logs
 ```
 
 Mỗi action kiểm tra `requester_id` thuộc `admin_users` trước khi thực hiện.
+
+### 8.5 Workflow kết bạn bằng danh thiếp
+
+Workflow này nối dữ liệu danh thiếp inbound với `zca-js.sendFriendRequest()` theo
+quy tắc xác định, không yêu cầu Hermes tự suy đoán danh thiếp từ lịch sử:
+
+1. `ZaloClient` nhận message `chat.recommended`, chuẩn hóa `name`, `phone` và
+   `gUid` trong dữ liệu contact.
+2. Adapter lưu dữ liệu contact vào `messages.extra_json` hiện có. Không thêm bảng,
+   cột hoặc migration mới.
+3. Bot chỉ kích hoạt workflow khi nội dung là lệnh kết bạn rõ nghĩa, chẳng hạn
+   “kết bạn người này”, “kết bạn với người này”, “gửi lời mời kết bạn” hoặc
+   “add người này”. Câu số nhiều như “kết bạn những người này” hoặc “kết bạn tất
+   cả” kích hoạt chế độ nhiều danh thiếp.
+4. Trong DM, lệnh và danh thiếp phải thuộc cùng DM. Trong group, admin phải mention
+   bot; danh thiếp có thể do bất kỳ thành viên nào trong group gửi.
+5. Lệnh số ít dùng đúng danh thiếp gần nhất nằm trước lệnh trong cùng conversation.
+6. Lệnh số nhiều dùng toàn bộ cụm danh thiếp liên tiếp ngay trước lệnh, theo thứ tự
+   cũ đến mới. Gặp một message thường thì cụm dừng; bot không quét ngược qua message
+   thường để lấy thêm danh thiếp cũ.
+7. Requester không thuộc `admin_users` không được gọi `sendFriendRequest` qua
+   workflow này. Bot trả lời rằng thao tác cần quản trị viên thực hiện.
+8. Mỗi contact phải có `gUid` hợp lệ. Contact thiếu `gUid` được báo lỗi riêng và
+   không được suy đoán ID từ tên. Nếu không tìm thấy contact phù hợp, bot yêu cầu
+   gửi lại danh thiếp.
+9. Adapter gọi `sendFriendRequest(message, gUid)` tuần tự qua bridge. Không tự retry
+   khi kết quả không rõ để tránh gửi lặp.
+10. Bot chỉ báo kết quả gửi lời mời. Nó không thay đổi `allowed_users`; admin thêm
+    allowlist sau bằng luồng quản trị hiện có.
+
+Với lệnh nhiều danh thiếp, kết quả tóm tắt tổng số thành công, đã là bạn/đã có lời
+mời, thiếu `gUid` và thất bại; đồng thời liệt kê tên tương ứng để admin biết mục nào
+cần xử lý lại.
 
 ## 9. Lưu hội thoại
 
@@ -582,6 +632,15 @@ Release đạt khi chứng minh được:
 15. Lịch sử, media và Zalo session hợp lệ sống qua VPS restart.
 
 ## 21. Rủi ro còn lại
+
+### 21.1 Rủi ro session group được chấp nhận khi phát hành
+
+Khi admin gửi một yêu cầu và Hermes còn đang xử lý, một thành viên khác có thể
+gửi yêu cầu tiếp theo trong cùng session group. Lượt xử lý sau có thể kế thừa
+nhầm context/quyền admin của lượt trước. Đây là rủi ro đã được người dùng chấp
+nhận cho phiên bản hiện tại, không còn là blocker phát hành. Giữ nguyên hội
+thoại chung của group; không sửa Hermes core và không tách session theo thành
+viên. Khuyến nghị admin thực hiện thao tác memory đặc quyền trong chat riêng.
 
 - `zca-js` là API không chính thức; tài khoản có thể bị challenge, giới hạn hoặc khóa.
 - Thành viên có quyền rộng và thao tác chạy ngay. Một yêu cầu nhầm có thể gây gửi nhầm, đổi group hoặc thay đổi dữ liệu trước khi admin can thiệp.

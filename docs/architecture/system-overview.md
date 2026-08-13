@@ -2,7 +2,10 @@
 
 Ngày khóa kiến trúc: 2026-08-09  
 Phiên bản thiết kế: `company-assistant-v1`  
-Baseline: `hermes-zalo-plugin@1.0.9`, `zca-js@2.1.2`, Hermes Agent `0.19.0`.
+Baseline: `hermes-zalo-plugin@1.0.9`, `zca-js@2.1.2`, Hermes Agent `0.19.0`
+tại commit `eb52760564dbba2e5971fa54bd67384e281cd3b8`. Plugin yêu cầu tối thiểu
+hai contract `PlatformEntry.env_enablement_fn` và `MessageEvent.channel_context`;
+không coi các checkout khác cùng nhãn `0.19.0` là tương thích nếu thiếu contract.
 
 ## Mục đích và phạm vi
 
@@ -31,7 +34,7 @@ flowchart LR
   T --> B[Bridge REST /api]
   B --> C
   H --> S
-``
+```
 
 ### Group
 
@@ -40,6 +43,14 @@ Với group trong `allowed_groups`, mọi message và event được normalize, 
 ### DM
 
 Chỉ DM từ `allowed_users` được ghi và gọi Hermes. Session key là một session riêng cho từng Zalo ID. DM của người khác không được đọc bởi thành viên hiện tại.
+
+### Quyền đọc lịch sử trusted-team
+
+Mọi thành viên trong `allowed_users` có thể tìm kiếm và đọc lịch sử của tất cả
+group trong `allowed_groups`, kể cả khi đang hỏi bot từ DM hoặc group khác. Đây
+là policy chia sẻ ngữ cảnh công ty có chủ đích. Thành viên không được đọc DM của
+người khác, export/xóa lịch sử, đổi retention hoặc thực hiện thao tác quản trị;
+các quyền liên phạm vi đó chỉ dành cho admin.
 
 ### Outbound
 

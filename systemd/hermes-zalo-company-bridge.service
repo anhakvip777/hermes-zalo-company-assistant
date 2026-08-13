@@ -1,0 +1,25 @@
+[Unit]
+Description=Hermes company assistant Zalo bridge
+Wants=network-online.target
+After=network-online.target
+Before=hermes-gateway.service
+
+[Service]
+Type=simple
+User=hermes-zalo
+Group=hermes-zalo
+WorkingDirectory=/opt/hermes-zalo-plugin
+EnvironmentFile=/etc/hermes-zalo-company.env
+Environment=NODE_ENV=production
+UMask=0077
+ExecStart=/usr/bin/node /opt/hermes-zalo-plugin/server.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hermes-zalo
+
+[Install]
+WantedBy=multi-user.target

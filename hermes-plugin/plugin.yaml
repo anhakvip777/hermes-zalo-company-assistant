@@ -1,71 +1,98 @@
 name: zalo-platform
-label: Zalo
+label: Zalo Company Assistant
 kind: platform
-version: 1.0.0
+version: 1.1.0
 description: >
-  Zalo (personal account) gateway adapter for Hermes Agent.
-  Bridges to a separate Node.js process running zca-js (unofficial Zalo
-  personal API) over a localhost HTTP/SSE bridge. Receives Zalo messages
-  (1-1 and group) and sends text, images, files, stickers, and voice back.
-  Requires the companion hermes-zalo-plugin Node service to be running and
-  logged in (via QR). NOTE: zca-js is an UNOFFICIAL API — use a secondary
-  account; Zalo may rate-limit or lock automated accounts.
+  Connect one company Zalo personal account to Hermes Agent through an
+  authenticated loopback zca-js bridge. Stores allowlisted company-group
+  conversations, isolates member DMs, and registers zalo, zalo_history, and
+  admin-only zalo_admin tools. zca-js is an unofficial API.
 author: cuong
+
 requires_env:
   - name: ZALO_PLUGIN_URL
-    description: "Base URL of the running zca-js bridge (e.g. http://127.0.0.1:8787)"
-    prompt: "Zalo plugin URL"
+    description: "Loopback bridge URL, normally http://127.0.0.1:8787"
+    prompt: "Zalo bridge URL"
     password: false
-optional_env:
   - name: ZALO_PLUGIN_TOKEN
-    description: "Shared secret for the bridge (must match ZALO_PLUGIN_TOKEN on the bridge)"
-    prompt: "Bridge token (optional)"
+    description: "Bridge token, at least 32 UTF-8 bytes"
+    prompt: "Zalo bridge token"
     password: true
+
+optional_env:
+  - name: ZALO_ADMIN_WEB_ENABLED
+    description: "Enable the embedded loopback admin Web UI"
+    prompt: "Enable Zalo admin Web UI"
+    password: false
+  - name: ZALO_ADMIN_WEB_HOST
+    description: "Admin Web bind host; must remain 127.0.0.1"
+    prompt: "Admin Web host"
+    password: false
+  - name: ZALO_ADMIN_WEB_PORT
+    description: "Admin Web loopback port; default 8790"
+    prompt: "Admin Web port"
+    password: false
+  - name: ZALO_ADMIN_WEB_PASSWORD_HASH
+    description: "Scrypt hash for the shared admin Web password"
+    prompt: "Admin Web password hash"
+    password: true
+  - name: ZALO_ADMIN_WEB_SESSION_SECRET
+    description: "Random secret of at least 32 UTF-8 bytes for signing sessions"
+    prompt: "Admin Web session secret"
+    password: true
+  - name: ZALO_ADMIN_WEB_SESSION_TTL_SECONDS
+    description: "Admin Web session lifetime in seconds; default 86400"
+    prompt: "Admin Web session lifetime"
+    password: false
   - name: ZALO_ALLOWED_USERS
-    description: "Comma-separated Zalo user IDs (uidFrom) allowed to talk to the bot. EMPTY = allow everyone (Telegram-style)."
-    prompt: "Allowed Zalo user IDs (comma-separated, blank = everyone)"
+    description: "Comma-separated member Zalo IDs; empty is rejected"
+    prompt: "Allowed member Zalo IDs"
     password: false
-  - name: ZALO_ALLOWED_THREADS
-    description: "Comma-separated thread/group IDs the bot operates in. EMPTY = everywhere. Use to confine the bot to specific groups/DMs."
-    prompt: "Allowed thread/group IDs (comma-separated, blank = everywhere)"
+  - name: ZALO_ADMIN_USERS
+    description: "Comma-separated admin IDs; each must also be an allowed user"
+    prompt: "Administrator Zalo IDs"
     password: false
-  - name: ZALO_HOME_CHANNEL
-    description: "Default thread for cron / notification delivery. Format: <threadId> or <threadType>:<threadId> (threadType=user|group)"
-    prompt: "Home channel (threadId or type:threadId)"
+  - name: ZALO_ALLOWED_GROUPS
+    description: "Comma-separated company group IDs; every message in these groups is stored"
+    prompt: "Allowed company group IDs"
     password: false
   - name: ZALO_GROUP_MODE
-    description: "In groups, when the bot responds: 'mention' (only when @mentioned or replied-to, default), 'all' (every message in allowed groups), or 'off' (DM only)."
-    prompt: "Group mode (mention/all/off)"
+    description: "Must be mention: only an allowed member mention starts Hermes"
+    prompt: "Group mode"
     password: false
-  - name: ZALO_LOG_IDS
-    description: "Log sender uid + threadId of every inbound message so you can discover IDs to add to allowlists. Default false."
-    prompt: "Log inbound IDs? (true/false)"
+  - name: ZALO_HISTORY_CONTEXT_MESSAGES
+    description: "Recent messages supplied to a turn, maximum 100"
+    prompt: "Context message count"
+    password: false
+  - name: ZALO_MEDIA_MAX_BYTES
+    description: "Download cap, maximum 20971520 (20 MiB)"
+    prompt: "Media byte cap"
+    password: false
+  - name: ZALO_HOME_CHANNEL
+    description: "Default delivery target as user:<id> or group:<id>"
+    prompt: "Home channel"
+    password: false
+  - name: ZALO_DATA_DIR
+    description: "Private bridge state directory"
+    prompt: "Zalo data directory"
+    password: false
+  - name: ZALO_DB_PATH
+    description: "SQLite conversation database path"
+    prompt: "Conversation database path"
+    password: false
+  - name: ZALO_MEDIA_DIR
+    description: "Stored media directory"
+    prompt: "Media directory"
     password: false
   - name: ZALO_CLIMSG_RETENTION_DAYS
-    description: "Days to keep the undo cache (msgId→cliMsgId) on disk so message recall survives bridge restarts. 0 disables persistence (memory-only). Default 30. Used by the bridge process."
-    prompt: "Undo-cache retention in days (default 30, 0 to disable)"
+    description: "Days to retain msgId to cliMsgId mappings; default 30"
+    prompt: "Undo cache retention days"
     password: false
   - name: ZALO_INFO_CACHE_TTL
-    description: "Seconds to cache read-info results (getUserInfo/getGroupInfo/getAllGroups/getAllFriends) in the bridge, reducing repeat calls that risk rate-limiting. Default 600. Bridge-side env."
-    prompt: "Info cache TTL in seconds (default 600)"
+    description: "Info API cache TTL in seconds; default 600"
+    prompt: "Info cache TTL"
     password: false
   - name: ZALO_INFO_MIN_INTERVAL_MS
-    description: "Minimum milliseconds between read-info calls to Zalo (rate limiter). On suspected rate-limit, the bridge backs off exponentially and serves stale cache. Default 1500. Bridge-side env."
-    prompt: "Min interval between info calls in ms (default 1500)"
-    password: false
-  - name: ZALO_ALLOWED_ACTION_GROUPS
-    description: "Comma-separated permission groups the agent may use, by danger level: read,send,interact,manage,destructive (or 'all'). Default: read,send,interact. 'destructive' (giải tán nhóm, xoá tin, block, đổi profile…) is OFF even under 'all' unless ZALO_ALLOW_DESTRUCTIVE=true."
-    prompt: "Allowed action groups (read,send,interact,manage,destructive | all)"
-    password: false
-  - name: ZALO_ALLOW_DESTRUCTIVE
-    description: "Allow the destructive group (disperseGroup, deleteMessage, deleteChat, removeFriend, blockUser, leaveGroup, changeGroupOwner, updateProfile…). VERY RISKY: anyone the bot listens to could trigger data loss. Default false."
-    prompt: "Allow DESTRUCTIVE actions? (true/false)"
-    password: false
-  - name: ZALO_ALLOWED_ACTIONS
-    description: "Custom allowlist: comma-separated zca-js method names to always permit regardless of group (e.g. disperseGroup,sendVideo). Overrides group gating."
-    prompt: "Custom allowed actions (comma-separated, optional)"
-    password: false
-  - name: ZALO_DENIED_ACTIONS
-    description: "Custom denylist: comma-separated zca-js method names to always block (highest precedence, beats everything)."
-    prompt: "Custom denied actions (comma-separated, optional)"
+    description: "Minimum delay between info API calls; default 1500 ms"
+    prompt: "Info API minimum interval"
     password: false

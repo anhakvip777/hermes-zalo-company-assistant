@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
 
@@ -13,41 +14,95 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        node: [18, 20, 22]
     steps:
       - uses: actions/checkout@v6
 
-      - name: Use Node ${{ matrix.node }}
-        uses: actions/setup-node@v6
+      - name: Check out pinned Hermes compatibility target
+        uses: actions/checkout@v6
         with:
-          node-version: ${{ matrix.node }}
+          repository: NousResearch/hermes-agent
+          ref: eb52760564dbba2e5971fa54bd67384e281cd3b8
+          path: .hermes-compat
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
 
-      - name: Syntax check all source files
+      - name: Install dependencies
+        run: |
+          npm ci
+          python -m pip install -e ./.hermes-compat
+          python -m pip install -r requirements-test.txt
+
+      - name: Node tests
+        run: npm test
+
+      - name: Python and integration tests
+        run: python -m pytest -q
+        env:
+          PYTHONPATH: .hermes-compat
+
+      - name: Syntax checks
         run: |
           node --check server.js
           node --check zaloClient.js
-          node --check permissions.js
-          node --check paths.js
+          node --check bridge/app.js
+          node --check bridge/auth.js
+          node --check bridge/config.js
+          node --check bridge/event-buffer.js
+          node --check bridge/method-catalog.js
+          node --check bridge/redaction.js
           node --check login.mjs
           node --check install.mjs
           node --check uninstall.mjs
           node --check bin/cli.mjs
-          node --check scripts/postinstall.mjs
+          node --check scripts/migrate-v1.0.9-config.mjs
 
-      - name: CLI smoke test (help + status, no login)
-        run: |
-          node bin/cli.mjs help
-          node bin/cli.mjs status
+      - name: Dependency audit
+        run: npm audit --omit=dev
 
-      - name: Verify npm pack contains no secrets
+      - name: Verify npm pack contains no runtime secrets
         shell: bash
         run: |
-          npm pack --dry-run 2>&1 | tee /tmp/pack.txt
-          if grep -Eq "credentials\.json|\.env|data/" /tmp/pack.txt; then
-            echo "::error::Package would ship sensitive files"; exit 1
+          npm pack --dry-run 2>&1 | tee pack.txt
+          if grep -Eq 'credentials\.json([[:space:]]|$)|(^|/)[^/[:space:]]*\.env([[:space:]]|$)|(^|/)history/|(^|/)qr\.png([[:space:]]|$)' pack.txt; then
+            echo "::error::Package would ship sensitive runtime data"; exit 1
           fi
-          echo "✓ pack contents clean"
+
+  release-artifacts:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install release dependencies
+        run: npm ci
+
+      - name: Build tagged release artifacts
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: node scripts/build-release.mjs --output release
+
+      - name: Upload release artifacts and provenance manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: hermes-zalo-company-${{ github.ref_name }}
+          path: release/*
+          if-no-files-found: error

@@ -2,6 +2,9 @@
 
 Schema khóa cho `company-assistant-v1`. Migration đầu tiên là `hermes-plugin/migrations/001_initial.sql`; migration đã áp dụng không được sửa, mọi thay đổi sau đó phải dùng file `002_*.sql` trở lên.
 
+SHA-256 khóa của `001_initial.sql`:
+`1bc42abea11f4480d7a513cb4ddd2ee9d6986d1449d5a939aed14e59c161e42a`.
+
 ## Nguyên tắc
 
 - SQLite bật `foreign_keys=ON`, WAL và busy timeout.
@@ -41,7 +44,7 @@ Indexes: `(conversation_id, sent_at DESC)`, `(sender_id, sent_at DESC)`, `(provi
 
 ## Migration runner
 
-`state_store.py` đọc các migration theo số thứ tự, tính SHA-256 trên bytes UTF-8 và so với `schema_migrations`. Nếu checksum của version đã áp dụng đổi, startup fail. Mỗi migration chạy trong transaction; chỉ insert vào `schema_migrations` sau khi script thành công.
+`history_store.py` đọc các migration theo số thứ tự, tính SHA-256 trên bytes UTF-8 và so với `schema_migrations`. Nếu checksum của version đã áp dụng đổi, startup fail. Mỗi migration chạy trong transaction; chỉ insert vào `schema_migrations` sau khi script thành công.
 
 ## Xóa/export
 

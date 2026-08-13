@@ -15,177 +15,34 @@ Configuration in config.yaml::
           enabled: true
           extra:
             bridge_url: "http://127.0.0.1:8787"
-            bridge_token: ""              # optional shared secret
-            allowed_users: []             # empty = allow all (with allow_all), or list of uidFrom
-            allow_all_users: false
-            group_require_mention: true   # only reply in groups when addressed
-            max_message_length: 4000
+            allowed_users: ["member-1", "member-2"]
+            admin_users: ["member-1"]
+            allowed_groups: ["company-group"]
+            group_mode: "mention"        # store all group messages; reply on allowed mention
+            history_context_messages: 100
+            media_max_bytes: 20971520
 
 Or via environment variables (override config.yaml):
     ZALO_PLUGIN_URL, ZALO_PLUGIN_TOKEN, ZALO_ALLOWED_USERS,
-    ZALO_ALLOW_ALL_USERS, ZALO_HOME_CHANNEL, ZALO_GROUP_REQUIRE_MENTION
+    ZALO_ADMIN_USERS, ZALO_ALLOWED_GROUPS, ZALO_GROUP_MODE,
+    ZALO_HOME_CHANNEL
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
-from datetime import datetime
+import re
+import time
+import unicodedata
+from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# ── zca-js action → permission-group map (KEEP IN SYNC WITH permissions.js) ──
-# Mirrors ACTION_GROUP in the bridge's permissions.js (145 APIs). Bundled
-# statically so `hermes gateway setup` can offer a custom action picker even
-# when the bridge is offline. If permissions.js changes, regenerate this.
-_ACTION_GROUP = {
-    "acceptFriendRequest": "manage",
-    "addGroupBlockedMember": "destructive",
-    "addGroupDeputy": "manage",
-    "addPollOptions": "interact",
-    "addQuickMessage": "manage",
-    "addReaction": "interact",
-    "addUnreadMark": "manage",
-    "addUserToGroup": "manage",
-    "blockUser": "destructive",
-    "blockViewFeed": "destructive",
-    "changeAccountAvatar": "destructive",
-    "changeFriendAlias": "manage",
-    "changeGroupAvatar": "manage",
-    "changeGroupName": "manage",
-    "changeGroupOwner": "destructive",
-    "createAutoReply": "manage",
-    "createCatalog": "manage",
-    "createGroup": "manage",
-    "createNote": "interact",
-    "createPoll": "interact",
-    "createProductCatalog": "manage",
-    "createReminder": "interact",
-    "deleteAutoReply": "destructive",
-    "deleteAvatar": "destructive",
-    "deleteCatalog": "destructive",
-    "deleteChat": "destructive",
-    "deleteGroupInviteBox": "destructive",
-    "deleteMessage": "destructive",
-    "deleteProductCatalog": "destructive",
-    "disableGroupLink": "destructive",
-    "disperseGroup": "destructive",
-    "editNote": "interact",
-    "editReminder": "interact",
-    "enableGroupLink": "manage",
-    "fetchAccountInfo": "read",
-    "findUser": "read",
-    "findUserByUsername": "read",
-    "forwardMessage": "send",
-    "getAliasList": "read",
-    "getAllFriends": "read",
-    "getAllGroups": "read",
-    "getArchivedChatList": "read",
-    "getAutoDeleteChat": "read",
-    "getAutoReplyList": "read",
-    "getAvatarList": "read",
-    "getAvatarUrlProfile": "read",
-    "getBizAccount": "read",
-    "getCatalogList": "read",
-    "getCloseFriends": "read",
-    "getContext": "read",
-    "getCookie": "read",
-    "getFriendBoardList": "read",
-    "getFriendOnlines": "read",
-    "getFriendRecommendations": "read",
-    "getFriendRequestStatus": "read",
-    "getFullAvatar": "read",
-    "getGroupBlockedMember": "read",
-    "getGroupChatHistory": "read",
-    "getGroupInfo": "read",
-    "getGroupInviteBoxInfo": "read",
-    "getGroupInviteBoxList": "read",
-    "getGroupLinkDetail": "read",
-    "getGroupLinkInfo": "read",
-    "getGroupMembersInfo": "read",
-    "getHiddenConversations": "read",
-    "getLabels": "read",
-    "getListBoard": "read",
-    "getListReminder": "read",
-    "getMultiUsersByPhones": "read",
-    "getMute": "read",
-    "getOwnId": "read",
-    "getPendingGroupMembers": "read",
-    "getPinConversations": "read",
-    "getPollDetail": "read",
-    "getProductCatalogList": "read",
-    "getQR": "read",
-    "getQuickMessageList": "read",
-    "getRelatedFriendGroup": "read",
-    "getReminder": "read",
-    "getReminderResponses": "read",
-    "getSentFriendRequest": "read",
-    "getSettings": "read",
-    "getStickerCategoryDetail": "read",
-    "getStickers": "read",
-    "getStickersDetail": "read",
-    "getUnreadMark": "read",
-    "getUserInfo": "read",
-    "inviteUserToGroups": "manage",
-    "joinGroupInviteBox": "manage",
-    "joinGroupLink": "manage",
-    "keepAlive": "read",
-    "lastOnline": "read",
-    "leaveGroup": "destructive",
-    "lockPoll": "interact",
-    "parseLink": "send",
-    "rejectFriendRequest": "manage",
-    "removeFriend": "destructive",
-    "removeFriendAlias": "manage",
-    "removeGroupBlockedMember": "manage",
-    "removeGroupDeputy": "manage",
-    "removeQuickMessage": "destructive",
-    "removeReminder": "destructive",
-    "removeUnreadMark": "manage",
-    "removeUserFromGroup": "destructive",
-    "resetHiddenConversPin": "destructive",
-    "reuseAvatar": "manage",
-    "reviewPendingMemberRequest": "manage",
-    "searchSticker": "read",
-    "sendBankCard": "send",
-    "sendCard": "send",
-    "sendDeliveredEvent": "interact",
-    "sendFriendRequest": "manage",
-    "sendLink": "send",
-    "sendMessage": "send",
-    "sendReport": "send",
-    "sendSeenEvent": "interact",
-    "sendSticker": "send",
-    "sendTypingEvent": "send",
-    "sendVideo": "send",
-    "sendVoice": "send",
-    "setHiddenConversations": "manage",
-    "setMute": "manage",
-    "setPinnedConversations": "manage",
-    "sharePoll": "interact",
-    "unblockUser": "manage",
-    "undo": "interact",
-    "undoFriendRequest": "manage",
-    "updateActiveStatus": "manage",
-    "updateArchivedChatList": "manage",
-    "updateAutoDeleteChat": "manage",
-    "updateAutoReply": "manage",
-    "updateCatalog": "manage",
-    "updateGroupSettings": "manage",
-    "updateHiddenConversPin": "destructive",
-    "updateLabels": "manage",
-    "updateLang": "destructive",
-    "updateProductCatalog": "manage",
-    "updateProfile": "destructive",
-    "updateProfileBio": "destructive",
-    "updateQuickMessage": "manage",
-    "updateSettings": "destructive",
-    "upgradeGroupToCommunity": "destructive",
-    "uploadAttachment": "send",
-    "uploadProductPhoto": "manage",
-    "votePoll": "interact",
-}
 
 from gateway.platforms.base import (
     BasePlatformAdapter,
@@ -197,10 +54,127 @@ from gateway.platforms.base import (
     cache_document_from_bytes,
 )
 from gateway.config import Platform
+from gateway.session import build_session_key
+
+try:
+    from .admin import (
+        AdminService,
+        AdminWebApp,
+        AdminWebSettings,
+        AdminWebSettingsError,
+    )
+    from .company_config import CompanyConfig, CompanyConfigError, CompanyConfigFile
+    from .history_store import HistoryStore, StoredMessage, redact_text
+    from .media_policy import MediaPolicy
+    from .request_context import Requester, bind_requester
+    from .tooling import ZaloTooling, register_tooling
+except ImportError:  # Hermes also loads platform adapters as top-level modules.
+    from admin import (
+        AdminService,
+        AdminWebApp,
+        AdminWebSettings,
+        AdminWebSettingsError,
+    )
+    from company_config import CompanyConfig, CompanyConfigError, CompanyConfigFile
+    from history_store import HistoryStore, StoredMessage, redact_text
+    from media_policy import MediaPolicy
+    from request_context import Requester, bind_requester
+    from tooling import ZaloTooling, register_tooling
+
+
+_ACTIVE_ADAPTER: Optional["ZaloAdapter"] = None
+_UNAUTHORIZED_DM_NOTICE = (
+    "Bạn chưa được cấp quyền sử dụng Trợ lý công ty. "
+    "Vui lòng liên hệ quản trị viên."
+)
+
+
+class _AdapterBridge:
+    def __init__(self, adapter: "ZaloAdapter") -> None:
+        self.adapter = adapter
+
+    async def request(self, method, path, payload=None, params=None):
+        if str(method).upper() == "GET":
+            return await self.adapter._get(path, params=dict(params or {}))
+        return await self.adapter._post(path, dict(payload or {}))
+
+    async def request_bytes(self, path, params=None):
+        return await self.adapter._get_bytes(path, params=dict(params or {}))
+
+
+class _LazyTooling:
+    @staticmethod
+    def _current() -> ZaloTooling:
+        if _ACTIVE_ADAPTER is None or not hasattr(_ACTIVE_ADAPTER, "tooling"):
+            raise RuntimeError("Zalo adapter is not active")
+        return _ACTIVE_ADAPTER.tooling
+
+    async def zalo(self, args, **kwargs):
+        try:
+            return await self._current().zalo(args, **kwargs)
+        except RuntimeError as exc:
+            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+
+    async def zalo_history(self, args, **kwargs):
+        try:
+            return await self._current().zalo_history(args, **kwargs)
+        except RuntimeError as exc:
+            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+
+    async def zalo_admin(self, args, **kwargs):
+        try:
+            return await self._current().zalo_admin(args, **kwargs)
+        except RuntimeError as exc:
+            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+
+    def on_pre_gateway_dispatch(self, **kwargs):
+        if _ACTIVE_ADAPTER is None:
+            return None
+        return self._current().on_pre_gateway_dispatch(**kwargs)
+
+    def on_pre_tool_call(self, **kwargs):
+        if _ACTIVE_ADAPTER is None:
+            return None
+        return self._current().on_pre_tool_call(**kwargs)
+
+    def on_post_tool_call(self, **kwargs):
+        if _ACTIVE_ADAPTER is None:
+            return None
+        return self._current().on_post_tool_call(**kwargs)
+
+
+_LAZY_TOOLING = _LazyTooling()
 
 
 def _truthy(v) -> bool:
     return str(v if v is not None else "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _status_label(value: Any, default: str = "unknown") -> str:
+    raw = redact_text(str(value or "").strip())
+    if not raw or len(raw) > 128 or "://" in raw:
+        return default
+    return raw
+
+
+def _configured_model_labels(hermes_home: Path) -> tuple[Optional[str], Optional[str]]:
+    """Read non-secret provider/model labels from Hermes' model config."""
+    try:
+        import yaml
+
+        payload = yaml.safe_load(
+            (hermes_home / "config.yaml").read_text(encoding="utf-8")
+        )
+    except (OSError, TypeError, ValueError):
+        return None, None
+    if not isinstance(payload, dict) or not isinstance(payload.get("model"), dict):
+        return None, None
+    model = payload["model"]
+    provider = _status_label(model.get("provider"), default="") or None
+    model_name = _status_label(
+        model.get("default") or model.get("model"), default=""
+    ) or None
+    return provider, model_name
 
 
 def _parse_home_channel(raw: str) -> tuple[str, str]:
@@ -220,57 +194,316 @@ def _parse_home_channel(raw: str) -> tuple[str, str]:
     return raw, "user"
 
 
+def _zalo_platform() -> Platform:
+    """Return Hermes' dynamic Zalo platform member.
+
+    Hermes normally registers the platform before constructing the adapter.
+    This fallback mirrors Hermes 0.19's dynamic enum creation so direct imports
+    used by tests and health probes remain usable too.
+    """
+    try:
+        return Platform("zalo")
+    except ValueError:
+        pseudo = object.__new__(Platform)
+        pseudo._value_ = "zalo"
+        pseudo._name_ = "ZALO"
+        Platform._value2member_map_["zalo"] = pseudo
+        Platform._member_map_["ZALO"] = pseudo
+        return pseudo
+
+
+def _provider_timestamp(value: Any) -> str:
+    """Normalize zca-js milliseconds/seconds/ISO timestamps to UTC ISO-8601."""
+    if value in (None, ""):
+        return datetime.now(timezone.utc).isoformat()
+    raw = str(value).strip()
+    try:
+        numeric = float(raw)
+    except (TypeError, ValueError):
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return datetime.now(timezone.utc).isoformat()
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat()
+    if numeric > 100_000_000_000:
+        numeric /= 1000
+    return datetime.fromtimestamp(numeric, tz=timezone.utc).isoformat()
+
+
+def _event_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _quote_text(value: Any) -> Optional[str]:
+    """Extract a string quote for Hermes' ``MessageEvent.reply_to_text``.
+
+    zca-js can return rich quote content as an object (for example
+    ``{"msg": "...", "style": {...}}``), while Hermes slices this field as
+    text. Normalize it at the adapter boundary so a reply can never crash the
+    gateway with ``TypeError: unhashable type: 'slice'``.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("msg", "text", "content", "description"):
+            if key in value:
+                extracted = _quote_text(value.get(key))
+                if extracted:
+                    return extracted
+        try:
+            return json.dumps(value, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            return str(value)
+    if isinstance(value, (list, tuple)):
+        parts = [_quote_text(item) for item in value]
+        joined = " ".join(part for part in parts if part)
+        return joined or None
+    return str(value)
+
+
+_FRIEND_SINGLE_COMMANDS = frozenset(
+    {
+        "ket ban nguoi nay",
+        "ket ban voi nguoi nay",
+        "gui loi moi ket ban",
+        "add nguoi nay",
+    }
+)
+_FRIEND_MULTIPLE_COMMANDS = frozenset(
+    {
+        "ket ban nhung nguoi nay",
+        "ket ban tat ca",
+        "gui loi moi ket ban cho nhung nguoi nay",
+    }
+)
+
+
+def _normalized_command_text(value: Any) -> str:
+    text = unicodedata.normalize("NFD", str(value or ""))
+    text = "".join(character for character in text if unicodedata.category(character) != "Mn")
+    text = re.sub(r"[^a-zA-Z0-9]+", " ", text).strip().lower()
+    words = text.split()
+    while words and words[0] in {"hay", "vui", "long", "giup"}:
+        words.pop(0)
+        if words and words[0] == "long":
+            words.pop(0)
+    return " ".join(words)
+
+
+def _friend_request_command(text: str) -> str | None:
+    normalized = _normalized_command_text(text)
+    if normalized in _FRIEND_SINGLE_COMMANDS:
+        return "single"
+    if normalized in _FRIEND_MULTIPLE_COMMANDS:
+        return "multiple"
+    return None
+
+
+def _contact_payload(message: Mapping[str, Any]) -> dict[str, str] | None:
+    """Extract a normalized contact card without guessing an ID from text."""
+    msg_type = str(message.get("msgType") or "")
+    candidates: list[Mapping[str, Any]] = []
+    for key in ("attachment", "media"):
+        value = message.get(key)
+        if isinstance(value, Mapping):
+            candidates.append(value)
+    listed = message.get("attachments")
+    if isinstance(listed, list):
+        candidates.extend(item for item in listed if isinstance(item, Mapping))
+
+    for candidate in candidates:
+        contact = candidate.get("contact")
+        if not isinstance(contact, Mapping):
+            if msg_type == "chat.recommended" and any(
+                key in candidate for key in ("gUid", "uid", "userId")
+            ):
+                contact = candidate
+            else:
+                continue
+        return {
+            "name": str(contact.get("name") or contact.get("title") or candidate.get("title") or ""),
+            "phone": str(contact.get("phone") or contact.get("phoneNumber") or ""),
+            "gUid": str(
+                contact.get("gUid")
+                or contact.get("uid")
+                or contact.get("userId")
+                or ""
+            ),
+        }
+    return None
+
+
+def _friend_request_bucket(response: Mapping[str, Any]) -> str:
+    if str(response.get("outcome") or "").casefold() == "unknown":
+        return "unknown"
+    if not response.get("error"):
+        return "success"
+    error = str(response.get("error") or "").casefold()
+    if re.search(r"(?:^|\D)(?:222|225)(?:\D|$)", error):
+        return "existing"
+    return "failed"
+
+
+def _explicit_provider_message_id(response: Any) -> Optional[str]:
+    """Extract a provider-confirmed message id without inventing a fallback."""
+    if not isinstance(response, dict):
+        return None
+    candidates = [response]
+    result = response.get("result")
+    if isinstance(result, dict):
+        candidates.append(result)
+        message = result.get("message")
+        if isinstance(message, dict):
+            candidates.append(message)
+    for candidate in reversed(candidates):
+        for key in ("msgId", "messageId"):
+            value = candidate.get(key)
+            if value not in (None, ""):
+                return str(value)
+    return None
+
+
 class ZaloAdapter(BasePlatformAdapter):
     """Zalo adapter that talks to a zca-js bridge over HTTP/SSE."""
 
     def __init__(self, config, **kwargs):
-        platform = Platform("zalo")
+        global _ACTIVE_ADAPTER
+        platform = _zalo_platform()
         super().__init__(config=config, platform=platform)
 
         extra = getattr(config, "extra", {}) or {}
+        if not isinstance(extra, dict):
+            extra = dict(extra)
+            config.extra = extra
+        # Hermes 0.19 reads this key when constructing the session key. Company
+        # groups deliberately share one agent session across all members.
+        extra["group_sessions_per_user"] = False
 
-        self.bridge_url = (
-            os.getenv("ZALO_PLUGIN_URL") or extra.get("bridge_url", "http://127.0.0.1:8787")
-        ).rstrip("/")
-        self.bridge_token = os.getenv("ZALO_PLUGIN_TOKEN") or extra.get("bridge_token", "")
+        supplied_company_config = kwargs.pop("company_config", None)
+        self.company_config = supplied_company_config or CompanyConfig.from_platform_extra(
+            extra
+        )
+        if not isinstance(self.company_config, CompanyConfig):
+            raise TypeError("company_config must be a CompanyConfig")
+        hermes_home = Path(os.getenv("HERMES_HOME") or (Path.home() / ".hermes"))
+        configured_provider, configured_model = _configured_model_labels(hermes_home)
+        self._provider_name = _status_label(
+            kwargs.pop("provider_name", None)
+            or extra.get("provider")
+            or getattr(config, "provider", None)
+            or os.getenv("HERMES_PROVIDER")
+            or os.getenv("HERMES_PROVIDER_NAME")
+            or configured_provider
+        )
+        self._model_name = _status_label(
+            kwargs.pop("model_name", None)
+            or extra.get("model")
+            or getattr(config, "model", None)
+            or os.getenv("HERMES_MODEL")
+            or os.getenv("HERMES_MODEL_NAME")
+            or configured_model
+        )
 
-        # ── Access control (Telegram-style: empty list = allow everyone) ──────
-        # A) ALLOWED_USERS  — uids permitted to command the bot. Empty = all.
-        # B) ALLOWED_THREADS — thread/group ids the bot operates in. Empty = all.
-        # C) GROUP_MODE     — in groups: "mention" (default) | "all" | "off".
-        def _csv_env(name, fallback_key):
-            raw = os.getenv(name)
-            if raw is not None:
-                return [x.strip() for x in raw.split(",") if x.strip()]
-            return [str(x).strip() for x in (extra.get(fallback_key, []) or []) if str(x).strip()]
+        self.bridge_url = self.company_config.bridge_url
+        self.bridge_token = self.company_config.bridge_token
+        self.allowed_users = sorted(self.company_config.allowed_users)
+        self._allowed_users = set(self.company_config.allowed_users)
+        self.allowed_threads = sorted(self.company_config.allowed_groups)
+        self._allowed_threads = set(self.company_config.allowed_groups)
+        self.group_mode = self.company_config.group_mode
+        self._own_id: Optional[str] = None
+        self._own_name: Optional[str] = None
+        self._bridge_available = False
+        self._zalo_logged_in = False
+        self._last_bridge_error: Optional[str] = None
+        self._monotonic_clock = kwargs.pop("monotonic_clock", time.monotonic)
+        if not callable(self._monotonic_clock):
+            raise TypeError("monotonic_clock must be callable")
 
-        self.allowed_users = _csv_env("ZALO_ALLOWED_USERS", "allowed_users")
-        self._allowed_users = {str(u) for u in self.allowed_users}
-        self.allowed_threads = _csv_env("ZALO_ALLOWED_THREADS", "allowed_threads")
-        self._allowed_threads = {str(t) for t in self.allowed_threads}
-
-        # Group response mode. Back-compat: legacy ZALO_GROUP_REQUIRE_MENTION=false
-        # maps to "all"; true/unset maps to "mention".
-        mode = (os.getenv("ZALO_GROUP_MODE") or extra.get("group_mode") or "").strip().lower()
-        if not mode:
-            legacy = os.getenv("ZALO_GROUP_REQUIRE_MENTION")
-            if legacy is not None and not _truthy(legacy):
-                mode = "all"
-            elif extra.get("group_require_mention") is False:
-                mode = "all"
-            else:
-                mode = "mention"
-        if mode not in {"mention", "all", "off"}:
-            mode = "mention"
-        self.group_mode = mode
-
-        # Deprecated flag: warn but honor (allow_all_users=true had no real effect
-        # beyond the old confusing gate; empty allowlist already means "all").
-        if os.getenv("ZALO_ALLOW_ALL_USERS") is not None or extra.get("allow_all_users") is not None:
-            logger.warning(
-                "Zalo: ZALO_ALLOW_ALL_USERS is deprecated and ignored. "
-                "Leave ZALO_ALLOWED_USERS empty to allow everyone, or list specific uids."
+        history_store = kwargs.pop("history_store", None)
+        if history_store is None:
+            db_path = Path(
+                os.getenv("ZALO_DB_PATH")
+                or extra.get("history_db_path")
+                or hermes_home
+                / "zalo-company"
+                / "history"
+                / "conversations.sqlite3"
             )
+            history_store = HistoryStore(
+                db_path,
+                account_id=os.getenv("ZALO_ACCOUNT_ID") or "company-zalo",
+            )
+        if not isinstance(history_store, HistoryStore):
+            raise TypeError("history_store must be a HistoryStore")
+        self.history_store = history_store
+
+        media_policy = kwargs.pop("media_policy", None)
+        if media_policy is None:
+            media_policy = MediaPolicy(
+                self.history_store.db_path.parent,
+                max_bytes=self.company_config.media_max_bytes,
+            )
+        if not isinstance(media_policy, MediaPolicy):
+            raise TypeError("media_policy must be a MediaPolicy")
+        self.media_policy = media_policy
+
+        export_root = hermes_home / "zalo-company" / "exports"
+        bridge = _AdapterBridge(self)
+        self.admin_service = kwargs.pop("admin_service", None) or AdminService(
+            config_file=CompanyConfigFile(hermes_home / "config.yaml"),
+            store=self.history_store,
+            memory_path=hermes_home / "memories" / "MEMORY.md",
+            status_provider=self._admin_status,
+            lifecycle={
+                "login_qr": self._admin_login_qr,
+                "reconnect": self._admin_reconnect,
+                "start": lambda args=None: self._admin_service_action("start", args),
+                "stop": lambda args=None: self._admin_service_action("stop", args),
+                "restart": lambda args=None: self._admin_service_action("restart", args),
+            },
+            log_path=Path(
+                os.getenv("HERMES_GATEWAY_LOG")
+                or hermes_home / "logs" / "gateway.log"
+            ),
+            log_provider=self._admin_show_logs,
+            runtime_config_provider=lambda: self.company_config,
+            runtime_config_applier=self._apply_company_config,
+            export_root=export_root,
+        )
+        if self.admin_service.runtime_config_provider is None:
+            self.admin_service.runtime_config_provider = lambda: self.company_config
+        if self.admin_service.runtime_config_applier is None:
+            self.admin_service.runtime_config_applier = self._apply_company_config
+        if self.admin_service.export_root is None:
+            self.admin_service.export_root = export_root
+        self.tooling = ZaloTooling(
+            bridge=bridge,
+            store=self.history_store,
+            config=self.company_config,
+            admin=self.admin_service,
+            on_config_change=self._apply_company_config,
+        )
+        try:
+            admin_web_settings = AdminWebSettings.from_env()
+        except AdminWebSettingsError as exc:
+            logger.error(
+                "Zalo admin Web UI disabled: %s",
+                redact_text(str(exc)) or "invalid settings",
+            )
+            admin_web_settings = AdminWebSettings(enabled=False)
+        self.admin_web = kwargs.pop("admin_web_app", None) or AdminWebApp(
+            settings=admin_web_settings,
+            admin=self.admin_service,
+            store=self.history_store,
+            bridge=bridge,
+            export_root=export_root,
+        )
+        _ACTIVE_ADAPTER = self
 
         # Log inbound uid/threadId to help operators discover ids for allowlists.
         self.log_ids = _truthy(os.getenv("ZALO_LOG_IDS")) if os.getenv("ZALO_LOG_IDS") else bool(extra.get("log_ids", False))
@@ -278,17 +511,130 @@ class ZaloAdapter(BasePlatformAdapter):
         max_msg = extra.get("max_message_length")
         self.max_message_length = int(max_msg or 4000)
 
-        self._own_id: Optional[str] = None
-        self._own_name: Optional[str] = None
         # Remember the thread type per chat_id from inbound messages so replies
         # route correctly (user vs group). Zalo thread IDs don't encode type.
         self._thread_types: Dict[str, str] = {}
+        self._unauthorized_dm_notice_times: Dict[str, float] = {}
+        self._unauthorized_dm_notice_cooldown = 3600.0
+        self._unauthorized_dm_notice_limit = 1024
         self._policy: Optional[Dict[str, Any]] = None
 
         self._session = None  # aiohttp.ClientSession
         self._sse_task: Optional[asyncio.Task] = None
         self._stop = False
-        self._last_event_id = 0
+        self._last_event_id: Optional[str] = None
+
+    def _apply_company_config(self, config: CompanyConfig) -> None:
+        self.company_config = config
+        self.bridge_url = config.bridge_url
+        self.bridge_token = config.bridge_token
+        self.allowed_users = sorted(config.allowed_users)
+        self._allowed_users = set(config.allowed_users)
+        self.allowed_threads = sorted(config.allowed_groups)
+        self._allowed_threads = set(config.allowed_groups)
+        self.group_mode = config.group_mode
+        tooling = getattr(self, "tooling", None)
+        if tooling is not None:
+            tooling.config = config
+
+    def _admin_status(self) -> Dict[str, Any]:
+        return {
+            "success": True,
+            "bridge_url": self.bridge_url,
+            "connected": bool(self._bridge_available and self._zalo_logged_in),
+            "adapter_active": bool(self.is_connected),
+            "bot": {
+                "id": self._own_id,
+                "name": self._own_name,
+            },
+            "bridge_error": self._last_bridge_error,
+            "gateway": {"status": "Đang chạy"},
+            "sse_clients": int(
+                self._sse_task is not None and not self._sse_task.done()
+            ),
+            "history": self.history_store.stats(),
+            "provider": self._provider_name,
+            "model": self._model_name,
+        }
+
+    async def _admin_login_qr(self, _args=None) -> Dict[str, Any]:
+        return await self._post("/relogin", {"forceQR": True})
+
+    async def _admin_reconnect(self, _args=None) -> Dict[str, Any]:
+        return await self._post("/relogin", {"forceQR": False})
+
+    async def _admin_service_action(
+        self,
+        action: str,
+        args: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        units = {
+            "bridge": os.getenv(
+                "ZALO_BRIDGE_SYSTEMD_UNIT",
+                "hermes-zalo-company-bridge.service",
+            ),
+            "gateway": os.getenv(
+                "HERMES_GATEWAY_SYSTEMD_UNIT",
+                "hermes-gateway.service",
+            ),
+        }
+        target = str((args or {}).get("target") or "bridge")
+        if target not in units:
+            return {
+                "success": False,
+                "error": "invalid service target",
+                "target": target,
+            }
+        unit = units[target]
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "systemctl",
+                action,
+                unit,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            return_code = await asyncio.wait_for(process.wait(), timeout=30)
+        except Exception as exc:
+            return {
+                "success": False,
+                "action": action,
+                "unit": unit,
+                "target": target,
+                "error": redact_text(str(exc)) or "service action failed",
+            }
+        return {
+            "success": return_code == 0,
+            "action": action,
+            "unit": unit,
+            "target": target,
+            "return_code": return_code,
+        }
+
+    async def _admin_show_logs(self, lines: int = 100) -> Dict[str, Any]:
+        unit = os.getenv(
+            "ZALO_BRIDGE_SYSTEMD_UNIT",
+            "hermes-zalo-company-bridge.service",
+        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "journalctl",
+                "--unit",
+                unit,
+                "--no-pager",
+                "--lines",
+                str(max(1, min(int(lines), 500))),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=30)
+            return {
+                "success": process.returncode == 0,
+                "unit": unit,
+                "lines": stdout.decode("utf-8", errors="replace").splitlines(),
+            }
+        except Exception as exc:
+            return {"success": False, "unit": unit, "error": str(exc)}
 
     @property
     def name(self) -> str:
@@ -297,12 +643,65 @@ class ZaloAdapter(BasePlatformAdapter):
     def _headers(self) -> Dict[str, str]:
         h = {"Content-Type": "application/json"}
         if self.bridge_token:
+            h["Authorization"] = f"Bearer {self.bridge_token}"
+            # Kept during the 1.0.9 bridge migration.
             h["x-bridge-token"] = self.bridge_token
         return h
 
+    async def _start_admin_web(self) -> bool:
+        web_app = getattr(self, "admin_web", None)
+        if web_app is None or bool(getattr(web_app, "is_running", False)):
+            return bool(web_app and getattr(web_app, "is_running", False))
+        try:
+            await web_app.start()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(
+                "Zalo admin Web UI failed to start: %s",
+                redact_text(str(exc)) or "unknown error",
+            )
+            return False
+        return bool(getattr(web_app, "is_running", False))
+
+    async def _stop_admin_web(self) -> None:
+        web_app = getattr(self, "admin_web", None)
+        if web_app is None:
+            return
+        try:
+            await web_app.stop()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Zalo admin Web UI cleanup failed: %s",
+                redact_text(str(exc)) or "unknown error",
+            )
+
+    def _ensure_sse_task(self) -> None:
+        if self._sse_task is None or self._sse_task.done():
+            self._sse_task = asyncio.create_task(self._sse_loop())
+
     # ── Connection lifecycle ──────────────────────────────────────────────
 
-    async def connect(self) -> bool:
+    def _apply_history_retention(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, int]:
+        days = self.company_config.history_retention_days
+        if days is None:
+            return {"messages": 0, "attachments": 0, "media_deleted": 0}
+        cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=days)
+        return self.history_store.purge_before(cutoff.isoformat())
+
+    async def connect(self, *, is_reconnect: bool = False) -> bool:
+        admin_web_running = await self._start_admin_web()
+        try:
+            self.company_config.require_runtime_secrets()
+        except CompanyConfigError as exc:
+            self._set_fatal_error("config_missing", str(exc), retryable=False)
+            return False
         if not self.bridge_url:
             self._set_fatal_error("config_missing", "ZALO_PLUGIN_URL must be set", retryable=False)
             return False
@@ -319,20 +718,46 @@ class ZaloAdapter(BasePlatformAdapter):
         import aiohttp
 
         self._stop = False
+        if self._session is not None and not self._session.closed:
+            await self._close_session()
+        purged = self._apply_history_retention()
+        if purged.get("messages"):
+            logger.info(
+                "Zalo: retention purged %s messages and %s media files",
+                purged.get("messages", 0),
+                purged.get("media_deleted", 0),
+            )
         self._session = aiohttp.ClientSession()
 
         # Probe bridge health and login state.
         try:
             async with self._session.get(
-                f"{self.bridge_url}/health", timeout=aiohttp.ClientTimeout(total=10)
+                f"{self.bridge_url}/health",
+                headers=self._headers(),
+                timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
                 data = await resp.json()
         except Exception as e:
-            logger.error("Zalo: cannot reach bridge at %s — %s", self.bridge_url, e)
+            message = redact_text(str(e)) or "bridge unavailable"
+            self._bridge_available = False
+            self._zalo_logged_in = False
+            self._last_bridge_error = message
+            logger.error("Zalo: cannot reach bridge at %s — %s", self.bridge_url, message)
+            self._set_fatal_error(
+                "bridge_unreachable",
+                f"Bridge unreachable: {message}",
+                retryable=True,
+            )
+            if admin_web_running:
+                self._ensure_sse_task()
+                return True
             await self._close_session()
-            self._set_fatal_error("bridge_unreachable", f"Bridge unreachable: {e}", retryable=True)
             return False
 
+        self._bridge_available = True
+        self._zalo_logged_in = bool(data.get("loggedIn"))
+        self._last_bridge_error = None
+        self._own_id = str(data.get("ownId") or "") or None
         if not data.get("loggedIn"):
             qr = data.get("qr")
             msg = (
@@ -340,17 +765,20 @@ class ZaloAdapter(BasePlatformAdapter):
                 f"Scan the QR (bridge state: {qr}). See {self.bridge_url}/qr.png"
             )
             logger.error("Zalo: %s", msg)
-            await self._close_session()
             self._set_fatal_error("not_logged_in", msg, retryable=True)
+            if admin_web_running:
+                self._ensure_sse_task()
+                return True
+            await self._close_session()
             return False
-
-        self._own_id = str(data.get("ownId") or "") or None
 
         # Fetch + log the active action policy (transparency; helps the agent
         # understand what it can/can't do without hitting 403 blindly).
         try:
             async with self._session.get(
-                f"{self.bridge_url}/policy", timeout=aiohttp.ClientTimeout(total=10)
+                f"{self.bridge_url}/policy",
+                headers=self._headers(),
+                timeout=aiohttp.ClientTimeout(total=10),
             ) as presp:
                 policy = await presp.json()
             self._policy = policy
@@ -363,10 +791,13 @@ class ZaloAdapter(BasePlatformAdapter):
             )
         except Exception as e:
             self._policy = None
-            logger.warning("Zalo: could not fetch action policy: %s", e)
+            logger.warning(
+                "Zalo: could not fetch action policy: %s",
+                redact_text(str(e)) or "unknown error",
+            )
 
         # Start the SSE inbound loop.
-        self._sse_task = asyncio.create_task(self._sse_loop())
+        self._ensure_sse_task()
         self._mark_connected()
         logger.info("Zalo: connected to bridge %s (ownId=%s)", self.bridge_url, self._own_id)
         return True
@@ -380,6 +811,8 @@ class ZaloAdapter(BasePlatformAdapter):
                 await self._sse_task
             except asyncio.CancelledError:
                 pass
+        self._sse_task = None
+        await self._stop_admin_web()
         await self._close_session()
 
     async def _close_session(self) -> None:
@@ -399,11 +832,9 @@ class ZaloAdapter(BasePlatformAdapter):
         backoff = 1.0
         while not self._stop:
             try:
-                headers = {}
-                if self.bridge_token:
-                    headers["x-bridge-token"] = self.bridge_token
-                if self._last_event_id:
-                    headers["Last-Event-ID"] = str(self._last_event_id)
+                headers = self._headers()
+                if self._last_event_id is not None:
+                    headers["Last-Event-ID"] = self._last_event_id
 
                 timeout = aiohttp.ClientTimeout(total=None, sock_read=None)
                 async with self._session.get(
@@ -418,14 +849,18 @@ class ZaloAdapter(BasePlatformAdapter):
             except Exception as e:
                 if self._stop:
                     break
-                logger.warning("Zalo: SSE disconnected (%s); reconnecting in %.1fs", e, backoff)
+                logger.warning(
+                    "Zalo: SSE disconnected (%s); reconnecting in %.1fs",
+                    redact_text(str(e)) or "unknown error",
+                    backoff,
+                )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)
 
     async def _consume_sse(self, resp) -> None:
         event_type = "message"
         data_lines: List[str] = []
-        event_id: Optional[int] = None
+        event_id: Optional[str] = None
 
         async for raw_line in resp.content:
             if self._stop:
@@ -451,10 +886,7 @@ class ZaloAdapter(BasePlatformAdapter):
             elif line.startswith("data:"):
                 data_lines.append(line[len("data:"):].lstrip())
             elif line.startswith("id:"):
-                try:
-                    event_id = int(line[len("id:"):].strip())
-                except ValueError:
-                    event_id = None
+                event_id = line[len("id:"):].strip()
             elif line.startswith("retry:"):
                 pass
 
@@ -465,7 +897,23 @@ class ZaloAdapter(BasePlatformAdapter):
             return
 
         if event_type == "status":
-            logger.info("Zalo: bridge status %s", data)
+            logger.info(
+                "Zalo: bridge status state=%s loggedIn=%s sessionDead=%s",
+                data.get("status") or data.get("state") or "unknown",
+                bool(data.get("loggedIn")),
+                bool(data.get("sessionDead")),
+            )
+            self._bridge_available = True
+            logged_in = bool(data.get("loggedIn")) or str(
+                data.get("status") or data.get("state") or ""
+            ).lower() in {"connected", "authenticated", "logged_in"}
+            self._zalo_logged_in = logged_in
+            if logged_in:
+                self._last_bridge_error = None
+                own_id = str(data.get("ownId") or "")
+                if own_id:
+                    self._own_id = own_id
+                self._mark_connected()
             return
         if event_type == "session_dead":
             await self._on_session_dead(data)
@@ -477,12 +925,59 @@ class ZaloAdapter(BasePlatformAdapter):
         # context line for the agent (no media). These don't trigger a turn by
         # default unless a handler wants them; we log + optionally dispatch.
         if event_type in ("reaction", "undo", "friend_event", "group_event"):
-            logger.info("Zalo: %s event %s", event_type, data)
+            if event_type in {"reaction", "undo"}:
+                self._store_message_event(event_type, data)
+            logger.info(
+                "Zalo: %s event id=%s thread=%s actor=%s",
+                event_type,
+                data.get("eventId") or data.get("event_id") or "unknown",
+                data.get("threadId") or "unknown",
+                data.get("senderId") or data.get("actorId") or "unknown",
+            )
             return
+
+    def _store_message_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        thread_type = "group" if data.get("threadType") == "group" else "dm"
+        thread_id = str(data.get("threadId") or "")
+        actor_id = str(data.get("senderId") or data.get("actorId") or "")
+        if thread_type == "group":
+            if thread_id not in self.company_config.allowed_groups:
+                return
+        elif actor_id not in self.company_config.allowed_users and thread_id not in self.company_config.allowed_users:
+            return
+        canonical = json.dumps(data, ensure_ascii=False, sort_keys=True, default=str)
+        event_key = str(data.get("eventId") or data.get("event_id") or "")
+        if not event_key:
+            event_key = hashlib.sha256(
+                f"{event_type}|{thread_type}|{thread_id}|{canonical}".encode("utf-8")
+            ).hexdigest()
+        try:
+            self.history_store.record_event(
+                event_key=event_key,
+                event_type=event_type,
+                provider_message_id=str(data.get("msgId") or data.get("messageId") or ""),
+                thread_type=thread_type,
+                thread_id=thread_id,
+                actor_id=actor_id,
+                actor_name=str(data.get("senderName") or data.get("actorName") or ""),
+                occurred_at=_provider_timestamp(
+                    data.get("occurredAt") or data.get("timestamp") or data.get("ts")
+                ),
+                payload=data,
+            )
+        except Exception as exc:
+            logger.error(
+                "Zalo: failed to store %s event: %s",
+                event_type,
+                redact_text(str(exc)) or "unknown error",
+            )
 
     async def _on_session_dead(self, data: Dict[str, Any]) -> None:
         """Zalo session ended (logout / kicked / cookie expired)."""
-        msg = (data or {}).get("message") or "Zalo session ended."
+        msg = (
+            redact_text(str((data or {}).get("message") or "Zalo session ended."))
+            or "Zalo session ended."
+        )
         code = (data or {}).get("code")
         logger.error("Zalo: SESSION DEAD (code=%s): %s", code, msg)
         # Mark fatal so `hermes gateway status` shows Zalo as down and the
@@ -493,10 +988,16 @@ class ZaloAdapter(BasePlatformAdapter):
             f"{self.bridge_url}/qr.png) to recover.",
             retryable=True,
         )
-        try:
-            await self._notify_fatal_error()
-        except Exception:
-            pass
+        self._zalo_logged_in = False
+        self._last_bridge_error = msg
+        admin_web_running = bool(
+            getattr(getattr(self, "admin_web", None), "is_running", False)
+        )
+        if not admin_web_running:
+            try:
+                await self._notify_fatal_error()
+            except Exception:
+                pass
         # Best-effort: notify the operator in their home channel if known.
         home = os.getenv("ZALO_HOME_CHANNEL")
         if home and self._message_handler:
@@ -525,82 +1026,439 @@ class ZaloAdapter(BasePlatformAdapter):
                 except Exception:
                     pass
 
-    async def _on_inbound_message(self, m: Dict[str, Any]) -> None:
-        if not self._message_handler:
+    async def _notify_unauthorized_dm(self, sender_id: str) -> None:
+        now = float(self._monotonic_clock())
+        cooldown = self._unauthorized_dm_notice_cooldown
+        expired = [
+            user_id
+            for user_id, sent_at in self._unauthorized_dm_notice_times.items()
+            if now - sent_at >= cooldown
+        ]
+        for user_id in expired:
+            self._unauthorized_dm_notice_times.pop(user_id, None)
+
+        if sender_id in self._unauthorized_dm_notice_times:
             return
+        if len(self._unauthorized_dm_notice_times) >= self._unauthorized_dm_notice_limit:
+            return
+
+        # Record before yielding so concurrent messages from one sender cannot
+        # race into duplicate notices.
+        self._unauthorized_dm_notice_times[sender_id] = now
+        try:
+            await self._post(
+                "/send",
+                {
+                    "threadId": sender_id,
+                    "threadType": "user",
+                    "text": _UNAUTHORIZED_DM_NOTICE,
+                },
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Zalo: failed to send unauthorized DM notice")
+
+    async def _handle_contact_friend_request(
+        self,
+        *,
+        stored: StoredMessage,
+        requester_id: str,
+        thread_type: str,
+        thread_id: str,
+        command_text: str,
+    ) -> bool:
+        command = _friend_request_command(command_text)
+        if command is None:
+            return False
+
+        if thread_type == "group" and requester_id not in self.company_config.allowed_users:
+            return False
+
+        if requester_id not in self.company_config.admin_users:
+            await self.send(
+                str(thread_id),
+                "Thao tác kết bạn bằng danh thiếp cần quản trị viên thực hiện.",
+                metadata={"thread_type": thread_type},
+            )
+            return True
+
+        cards = self.history_store.contact_cards_before(
+            message_id=stored.message_id,
+            thread_type=thread_type,
+            thread_id=thread_id,
+            multiple=command == "multiple",
+        )
+        if not cards:
+            await self.send(
+                str(thread_id),
+                "Không tìm thấy danh thiếp phù hợp. Vui lòng gửi lại danh thiếp rồi ra lệnh kết bạn.",
+                metadata={"thread_type": thread_type},
+            )
+            return True
+
+        results: list[tuple[dict[str, Any], str]] = []
+        for card in cards:
+            g_uid = str(card.get("gUid") or "").strip()
+            if not g_uid:
+                results.append((card, "missing"))
+                continue
+            response = await self.friend_request(
+                g_uid,
+                msg="Xin chào, tôi là trợ lý công ty.",
+            )
+            results.append((card, _friend_request_bucket(response)))
+
+        labels = {
+            "success": "thành công",
+            "existing": "đã là bạn hoặc đã có lời mời",
+            "unknown": "không rõ kết quả",
+            "missing": "thiếu Zalo ID",
+            "failed": "thất bại",
+        }
+        lines = ["Kết quả kết bạn:"]
+        for card, status in results:
+            name = str(card.get("name") or card.get("gUid") or "(không tên)")
+            lines.append(f"- {name}: {labels[status]}")
+        await self.send(
+            str(thread_id),
+            "\n".join(lines),
+            metadata={"thread_type": thread_type},
+        )
+        return True
+
+    async def _on_inbound_message(self, m: Dict[str, Any]) -> None:
         if m.get("isSelf"):
             return
 
         thread_id = str(m.get("threadId") or "")
-        thread_type = m.get("threadType") or "user"  # "user" | "group"
+        provider_thread_type = m.get("threadType") or "user"
         sender_id = str(m.get("senderId") or "")
-        sender_name = m.get("senderName") or ""
-        text = m.get("text") or ""
-        chat_type = "group" if thread_type == "group" else "dm"
+        sender_name = str(m.get("senderName") or "")
+        original_text = str(m.get("text") or "")
+        chat_type = "group" if provider_thread_type == "group" else "dm"
 
-        # Remember type for outbound routing.
-        self._thread_types[thread_id] = "group" if thread_type == "group" else "user"
+        if not thread_id or not sender_id:
+            logger.warning("Zalo: inbound message is missing threadId or senderId")
+            return
+        if chat_type == "dm" and sender_id not in self.company_config.allowed_users:
+            logger.debug("Zalo: notifying non-allowed DM sender %s", sender_id)
+            await self._notify_unauthorized_dm(sender_id)
+            return
 
-        # ── Access control (Telegram-style) ──────────────────────────────────
-        # Optionally log ids so the operator can build allowlists.
+        conversation_id = thread_id if chat_type == "group" else sender_id
+        self._thread_types[conversation_id] = (
+            "group" if chat_type == "group" else "user"
+        )
+
         if self.log_ids:
             logger.info(
                 "Zalo inbound: uid=%s name=%r threadId=%s type=%s",
-                sender_id, sender_name, thread_id, chat_type,
+                sender_id,
+                sender_name,
+                conversation_id,
+                chat_type,
             )
 
-        # B) Thread/group allowlist — empty = everywhere.
-        if self._allowed_threads and thread_id not in self._allowed_threads:
-            logger.debug("Zalo: ignoring message in non-allowed thread %s", thread_id)
-            return
-
-        # A) Sender allowlist — empty = everyone.
-        if self._allowed_users and sender_id not in self._allowed_users:
-            logger.debug("Zalo: ignoring message from non-allowed user %s", sender_id)
-            return
-
-        # C) Group response mode: off / mention / all.
         if chat_type == "group":
-            if self.group_mode == "off":
+            if conversation_id not in self.company_config.allowed_groups:
+                logger.debug(
+                    "Zalo: ignoring message in non-allowed group %s",
+                    conversation_id,
+                )
                 return
-            if self.group_mode == "mention":
-                addressed = self._is_addressed(m, text)
-                if not addressed:
-                    return
-                text = addressed
-            # group_mode == "all" → respond to everything (subject to A+B above)
+            addressed_text = self._is_addressed(m, original_text)
+        else:
+            addressed_text = original_text
+
+        attachments = self._normalized_attachments(m)
+        sent_at = _provider_timestamp(
+            m.get("sentAt") or m.get("timestamp") or m.get("ts")
+        )
+        provider_message_id = str(m.get("messageId") or "")
+        provider_cli_message_id = str(m.get("cliMsgId") or "")
+        quote = m.get("quote") if isinstance(m.get("quote"), dict) else None
+        reply_to_provider_message_id = str(
+            m.get("replyToMessageId") or (quote or {}).get("msgId") or ""
+        )
+
+        contact = _contact_payload(m)
+        extra = {
+            "msg_type": str(m.get("msgType") or ""),
+            "attachments": [
+                {
+                    key: attachment.get(key)
+                    for key in (
+                        "kind",
+                        "filename",
+                        "mime_type",
+                        "size_bytes",
+                        "download_status",
+                    )
+                }
+                for attachment in attachments
+            ],
+        }
+        if contact is not None:
+            extra["contact"] = contact
+
+        try:
+            stored = self.history_store.store_message(
+                thread_type=chat_type,
+                thread_id=conversation_id,
+                sender_id=sender_id,
+                sender_name=sender_name,
+                title=(
+                    str(m.get("threadName") or conversation_id)
+                    if chat_type == "group"
+                    else str(sender_name or sender_id)
+                ),
+                text=original_text,
+                provider_message_id=provider_message_id,
+                provider_cli_message_id=provider_cli_message_id,
+                event_id=str(m.get("eventId") or m.get("event_id") or ""),
+                mentioned_bot=addressed_text is not None,
+                reply_to_provider_message_id=reply_to_provider_message_id,
+                quote=quote,
+                sent_at=sent_at,
+                attachments=attachments,
+                extra=extra,
+            )
+        except Exception as exc:
+            logger.error(
+                "Zalo: failed to store inbound message: %s",
+                redact_text(str(exc)) or "unknown error",
+            )
+            return
+
+        if not stored.inserted:
+            return
+
+        media_urls, media_types, message_type = await self._persist_attachments(
+            stored=stored,
+            attachments=attachments,
+            thread_type=chat_type,
+            thread_id=conversation_id,
+            sent_at=sent_at,
+        )
+
+        command_text = addressed_text if chat_type == "group" else original_text
+        if command_text is not None and await self._handle_contact_friend_request(
+            stored=stored,
+            requester_id=sender_id,
+            thread_type=chat_type,
+            thread_id=conversation_id,
+            command_text=command_text,
+        ):
+            return
+
+        if chat_type == "group":
+            # Store every allowed-group event before sender and mention gates.
+            if sender_id not in self.company_config.allowed_users:
+                return
+            if addressed_text is None:
+                return
+        if not self._message_handler:
+            return
 
         source = self.build_source(
-            chat_id=thread_id,
-            chat_name=sender_name if chat_type == "dm" else thread_id,
+            chat_id=conversation_id,
+            chat_name=(
+                sender_name
+                if chat_type == "dm"
+                else str(m.get("threadName") or conversation_id)
+            ),
             chat_type=chat_type,
             user_id=sender_id,
             user_name=sender_name,
+            message_id=provider_message_id or provider_cli_message_id or None,
+        )
+        session_key = build_session_key(source, group_sessions_per_user=False)
+        requester = Requester(
+            requester_id=sender_id,
+            thread_type=chat_type,
+            thread_id=conversation_id,
+            is_admin=sender_id in self.company_config.admin_users,
+            session_key=session_key,
         )
 
-        # Download inbound media so the agent can see/hear it.
-        media_urls: List[str] = []
-        media_types: List[str] = []
-        message_type = MessageType.TEXT
-        media = m.get("media")
-        if isinstance(media, dict) and media.get("url"):
-            local_path, mtype = await self._download_media(media)
-            if local_path:
-                media_urls.append(local_path)
-                media_types.append(media.get("mime") or "")
-                message_type = mtype
-
         event = MessageEvent(
-            text=text,
+            text=addressed_text if chat_type == "group" else original_text,
             message_type=message_type,
             source=source,
-            message_id=str(m.get("messageId") or ""),
+            message_id=provider_message_id or provider_cli_message_id,
             raw_message=m,
             media_urls=media_urls,
             media_types=media_types,
-            timestamp=datetime.now(),
+            reply_to_message_id=reply_to_provider_message_id or None,
+            reply_to_text=_quote_text((quote or {}).get("content")),
+            channel_context=self._history_context(
+                thread_type=chat_type,
+                thread_id=conversation_id,
+                current_message_id=stored.message_id,
+            ),
+            metadata={
+                "requester_id": sender_id,
+                "requester_is_admin": requester.is_admin,
+                "session_key": session_key,
+                "thread_type": chat_type,
+                "stored_message_id": stored.message_id,
+            },
+            timestamp=_event_datetime(sent_at),
         )
-        await self.handle_message(event)
+        with bind_requester(requester):
+            await self.handle_message(event)
+
+    @staticmethod
+    def _normalized_attachments(m: Dict[str, Any]) -> List[Dict[str, Any]]:
+        raw_attachments: List[Dict[str, Any]] = []
+        listed = m.get("attachments")
+        if isinstance(listed, list):
+            raw_attachments.extend(item for item in listed if isinstance(item, dict))
+        media = m.get("media")
+        if isinstance(media, dict):
+            raw_attachments.append(media)
+        elif not raw_attachments and isinstance(m.get("attachment"), dict):
+            raw_attachments.append(m["attachment"])
+
+        normalized: List[Dict[str, Any]] = []
+        for index, attachment in enumerate(raw_attachments):
+            remote_url = str(
+                attachment.get("remote_url")
+                or attachment.get("url")
+                or attachment.get("href")
+                or ""
+            )
+            raw_size = attachment.get("size_bytes")
+            if raw_size is None:
+                raw_size = attachment.get("size")
+            try:
+                size_bytes = int(raw_size) if int(raw_size or 0) > 0 else None
+            except (TypeError, ValueError):
+                size_bytes = None
+            normalized.append(
+                {
+                    "attachment_index": int(
+                        attachment.get("attachment_index", index)
+                    ),
+                    "kind": str(
+                        attachment.get("kind")
+                        or attachment.get("type")
+                        or "other"
+                    ),
+                    "filename": str(
+                        attachment.get("filename")
+                        or attachment.get("fileName")
+                        or attachment.get("title")
+                        or f"attachment-{index}"
+                    ),
+                    "mime_type": str(
+                        attachment.get("mime_type")
+                        or attachment.get("mime")
+                        or "application/octet-stream"
+                    ),
+                    "size_bytes": size_bytes,
+                    "remote_url": remote_url or None,
+                    "download_status": "pending" if remote_url else "metadata_only",
+                }
+            )
+        return normalized
+
+    async def _media_chunks(self, url: str):
+        import aiohttp
+
+        if not self._session or self._session.closed:
+            raise RuntimeError("Zalo media session is not connected")
+        async with self._session.get(
+            url,
+            timeout=aiohttp.ClientTimeout(total=120),
+        ) as response:
+            if response.status != 200:
+                raise RuntimeError(f"media download failed with HTTP {response.status}")
+            async for chunk in response.content.iter_chunked(64 * 1024):
+                yield chunk
+
+    async def _persist_attachments(
+        self,
+        *,
+        stored: StoredMessage,
+        attachments: List[Dict[str, Any]],
+        thread_type: str,
+        thread_id: str,
+        sent_at: str,
+    ) -> tuple[List[str], List[str], MessageType]:
+        media_urls: List[str] = []
+        media_types: List[str] = []
+        message_type = MessageType.TEXT
+        type_map = {
+            "image": MessageType.PHOTO,
+            "voice": MessageType.VOICE,
+            "video": MessageType.VIDEO,
+            "file": MessageType.DOCUMENT,
+        }
+        for attachment_id, attachment in zip(stored.attachment_ids, attachments):
+            if attachment["download_status"] != "pending":
+                continue
+            result = await self.media_policy.store_attachment(
+                store=self.history_store,
+                attachment_id=attachment_id,
+                attachment=attachment,
+                thread_type=thread_type,
+                thread_id=thread_id,
+                sent_at=sent_at,
+                chunks=self._media_chunks(str(attachment["remote_url"])),
+            )
+            if result.status == "downloaded" and result.local_path:
+                media_urls.append(result.local_path)
+                media_types.append(str(attachment.get("mime_type") or ""))
+                if message_type == MessageType.TEXT:
+                    message_type = type_map.get(
+                        str(attachment.get("kind") or "").lower(),
+                        MessageType.DOCUMENT,
+                    )
+        return media_urls, media_types, message_type
+
+    def _history_context(
+        self,
+        *,
+        thread_type: str,
+        thread_id: str,
+        current_message_id: int,
+    ) -> Optional[str]:
+        cap = self.company_config.history_context_messages
+        if cap <= 1:
+            return None
+        rows = self.history_store.recent_messages(
+            thread_type,
+            thread_id,
+            limit=cap,
+        )
+        rows = [row for row in rows if int(row["id"]) != current_message_id]
+        rows = rows[-(cap - 1) :]
+        lines = []
+        for row in rows:
+            extra = row.get("extra") if isinstance(row.get("extra"), dict) else {}
+            lines.append(
+                json.dumps(
+                    {
+                        "sent_at": row.get("sent_at"),
+                        "sender_id": row.get("sender_id"),
+                        "sender_name": row.get("sender_name"),
+                        "text": row.get("text"),
+                        "reply_to_message_id": row.get("reply_to_message_id"),
+                        "mentioned_bot": bool(row.get("mentioned_bot")),
+                        "attachments": extra.get("attachments", []),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        return "\n".join(lines) or None
+
+    async def _on_inbound_message_legacy(self, m: Dict[str, Any]) -> None:
+        """Compatibility alias retained for callers of the old private hook."""
+        await self._on_inbound_message(m)
+        # ── Access control (Telegram-style) ──────────────────────────────────
 
     async def _download_media(self, media: Dict[str, Any]) -> tuple[Optional[str], "MessageType"]:
         """Download a media URL to the Hermes cache. Returns (path, MessageType)."""
@@ -621,7 +1479,8 @@ class ZaloAdapter(BasePlatformAdapter):
                     return None, MessageType.TEXT
                 data = await resp.read()
         except Exception as e:
-            logger.warning("Zalo: media download error for %s: %s", kind, e)
+            message = redact_text(str(e)) or "media download failed"
+            logger.warning("Zalo: media download error for %s: %s", kind, message)
             return None, MessageType.TEXT
 
         try:
@@ -634,31 +1493,30 @@ class ZaloAdapter(BasePlatformAdapter):
             # file and anything else → document
             return cache_document_from_bytes(data, file_name), MessageType.DOCUMENT
         except Exception as e:
-            logger.warning("Zalo: failed to cache media (%s): %s", kind, e)
+            logger.warning(
+                "Zalo: failed to cache media (%s): %s",
+                kind,
+                redact_text(str(e)) or "unknown error",
+            )
             return None, MessageType.TEXT
 
     def _is_addressed(self, m: Dict[str, Any], text: str) -> Optional[str]:
         """Return the (possibly stripped) text if the bot is addressed, else None.
 
-        Detection priority (strongest → weakest):
-        1. Real @mention: bridge forwards mentions[] (uids); if our ownId is in
-           it, we're mentioned. Strip the leading bot-name token if present.
-        2. Reply-to-bot: bridge forwards quotedOwnerId; if it equals ownId, the
-           user replied to one of our messages.
-        3. Text heuristic fallback: message starts with the bot name / a known
-           trigger word (used when we don't have uid signals).
+        The bridge forwards real group @mentions as ``mentions[]`` UIDs. The
+        bot is addressed only when its own UID is present; then a leading bot
+        name is stripped from the text when possible.
+
+        A plain text prefix such as ``Hermes`` or ``bot`` is deliberately not
+        enough, and replying to an old bot message is not a substitute for the
+        required @mention.
         """
         # 1) Real mention by uid.
         mentions = m.get("mentions") or []
         if self._own_id and str(self._own_id) in {str(x) for x in mentions}:
-            return self._strip_leading_name(text) or text
+            return self._strip_leading_name(text) or text or " "
 
-        # 2) Reply to one of the bot's messages.
-        if self._own_id and str(m.get("quotedOwnerId") or "") == str(self._own_id):
-            return text or " "
-
-        # 3) Text heuristic fallback (no reliable uid signal).
-        return self._strip_leading_name(text)
+        return None
 
     def _strip_leading_name(self, text: str) -> Optional[str]:
         """If text starts with the bot name / a trigger, strip it and return the
@@ -701,17 +1559,57 @@ class ZaloAdapter(BasePlatformAdapter):
                 timeout=aiohttp.ClientTimeout(total=60),
             ) as resp:
                 return await resp.json()
+        except (asyncio.TimeoutError, TimeoutError) as e:
+            return {
+                "error": str(e) or "Zalo provider call timed out; outcome unknown",
+                "outcome": "unknown",
+            }
         except Exception as e:
-            return {"error": str(e)}
+            # Connection resets and other transport failures can happen after
+            # the provider accepted a mutation. Never signal that an automatic
+            # retry is safe.
+            return {"error": str(e), "outcome": "unknown"}
 
     def _thread_type_from_chat_id(self, chat_id: str, metadata: Optional[Dict[str, Any]]) -> str:
-        if metadata and metadata.get("thread_type") in {"user", "group"}:
-            return metadata["thread_type"]
+        if metadata and metadata.get("thread_type") in {"user", "dm", "group"}:
+            return "group" if metadata["thread_type"] == "group" else "user"
         # Use the type remembered from inbound messages for this chat.
         remembered = self._thread_types.get(str(chat_id))
         if remembered in {"user", "group"}:
             return remembered
         return "user"
+
+    def _store_outbound(
+        self,
+        *,
+        chat_id: str,
+        thread_type: str,
+        text: str,
+        provider_message_id: str,
+        reply_to: Optional[str] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        if not provider_message_id:
+            return
+        try:
+            self.history_store.store_message(
+                thread_type="group" if thread_type == "group" else "dm",
+                thread_id=str(chat_id),
+                sender_id=str(self._own_id or "zalo-bot"),
+                sender_name=str(self._own_name or "Hermes"),
+                text=str(text),
+                provider_message_id=provider_message_id,
+                is_bot=True,
+                reply_to_provider_message_id=str(reply_to or ""),
+                attachments=attachments,
+            )
+        except Exception as exc:
+            # Delivery already happened; a history failure must be visible but
+            # cannot safely turn a confirmed provider send into a retry.
+            logger.error(
+                "Zalo: failed to store confirmed outbound message: %s",
+                redact_text(str(exc)) or "unknown error",
+            )
 
     async def send(
         self,
@@ -724,6 +1622,7 @@ class ZaloAdapter(BasePlatformAdapter):
         # Split long messages.
         chunks = self.truncate_message(content, max_length=self.max_message_length)
         last = None
+        last_message_id = None
         for chunk in chunks:
             if not chunk.strip():
                 continue
@@ -732,20 +1631,29 @@ class ZaloAdapter(BasePlatformAdapter):
                 {"threadId": chat_id, "threadType": thread_type, "text": chunk},
             )
             if res.get("error"):
-                return SendResult(success=False, error=res["error"])
+                return SendResult(
+                    success=False,
+                    error=res["error"],
+                    raw_response=res,
+                    retryable=False,
+                )
             last = res
+            provider_message_id = _explicit_provider_message_id(res)
+            if provider_message_id:
+                last_message_id = provider_message_id
+                self._store_outbound(
+                    chat_id=str(chat_id),
+                    thread_type=thread_type,
+                    text=chunk,
+                    provider_message_id=provider_message_id,
+                    reply_to=reply_to,
+                )
             await asyncio.sleep(0.2)
-        msg_id = None
-        if isinstance(last, dict):
-            result = last.get("result")
-            if isinstance(result, dict):
-                # zca-js returns { message: { msgId }, attachment: [...] }
-                msg = result.get("message")
-                if isinstance(msg, dict) and msg.get("msgId") is not None:
-                    msg_id = str(msg.get("msgId"))
-                elif result.get("msgId") is not None:
-                    msg_id = str(result.get("msgId"))
-        return SendResult(success=True, message_id=msg_id)
+        return SendResult(
+            success=True,
+            message_id=last_message_id,
+            raw_response=last,
+        )
 
     async def send_typing(self, chat_id: str, metadata=None) -> None:
         thread_type = self._thread_type_from_chat_id(chat_id, metadata)
@@ -755,27 +1663,78 @@ class ZaloAdapter(BasePlatformAdapter):
         return await self.send_image_file(chat_id, image_url, caption, reply_to, metadata)
 
     async def send_image_file(self, chat_id, image_path, caption=None, reply_to=None, metadata=None, **kwargs):
-        thread_type = self._thread_type_from_chat_id(chat_id, metadata)
-        res = await self._post(
-            "/send-attachment",
-            {"threadId": chat_id, "threadType": thread_type, "path": image_path, "caption": caption or ""},
+        return await self._send_local_attachment(
+            chat_id,
+            image_path,
+            kind="image",
+            caption=caption,
+            reply_to=reply_to,
+            metadata=metadata,
         )
-        if res.get("error"):
-            return SendResult(success=False, error=res["error"])
-        return SendResult(success=True)
 
     async def send_document(self, chat_id, file_path, caption=None, file_name=None, reply_to=None, metadata=None, **kwargs):
+        return await self._send_local_attachment(
+            chat_id,
+            file_path,
+            kind="file",
+            caption=caption,
+            reply_to=reply_to,
+            metadata=metadata,
+            file_name=file_name,
+        )
+
+    async def _send_local_attachment(
+        self,
+        chat_id,
+        file_path,
+        *,
+        kind: str,
+        caption=None,
+        reply_to=None,
+        metadata=None,
+        file_name=None,
+    ):
         thread_type = self._thread_type_from_chat_id(chat_id, metadata)
         res = await self._post(
             "/send-attachment",
             {"threadId": chat_id, "threadType": thread_type, "path": file_path, "caption": caption or ""},
         )
         if res.get("error"):
-            return SendResult(success=False, error=res["error"])
-        return SendResult(success=True)
+            return SendResult(success=False, error=res["error"], raw_response=res, retryable=False)
+        provider_message_id = _explicit_provider_message_id(res)
+        if provider_message_id:
+            path = Path(str(file_path))
+            try:
+                size_bytes = path.stat().st_size
+            except OSError:
+                size_bytes = None
+            self._store_outbound(
+                chat_id=str(chat_id),
+                thread_type=thread_type,
+                text=str(caption or ""),
+                provider_message_id=provider_message_id,
+                reply_to=reply_to,
+                attachments=[
+                    {
+                        "kind": kind,
+                        "filename": str(file_name or path.name),
+                        "size_bytes": size_bytes,
+                        "local_path": str(path),
+                        "download_status": "downloaded",
+                    }
+                ],
+            )
+        return SendResult(success=True, message_id=provider_message_id, raw_response=res)
 
     async def send_video(self, chat_id, video_path, caption=None, reply_to=None, metadata=None, **kwargs):
-        return await self.send_document(chat_id, video_path, caption=caption, metadata=metadata)
+        return await self._send_local_attachment(
+            chat_id,
+            video_path,
+            kind="video",
+            caption=caption,
+            reply_to=reply_to,
+            metadata=metadata,
+        )
 
     async def send_voice(self, chat_id, audio_path, caption=None, reply_to=None, metadata=None, **kwargs):
         thread_type = self._thread_type_from_chat_id(chat_id, metadata)
@@ -786,7 +1745,23 @@ class ZaloAdapter(BasePlatformAdapter):
                 {"threadId": chat_id, "threadType": thread_type, "voiceUrl": audio_path},
             )
             if not res.get("error"):
-                return SendResult(success=True)
+                provider_message_id = _explicit_provider_message_id(res)
+                if provider_message_id:
+                    self._store_outbound(
+                        chat_id=str(chat_id),
+                        thread_type=thread_type,
+                        text=str(caption or ""),
+                        provider_message_id=provider_message_id,
+                        reply_to=reply_to,
+                        attachments=[
+                            {
+                                "kind": "voice",
+                                "remote_url": str(audio_path),
+                                "download_status": "metadata_only",
+                            }
+                        ],
+                    )
+                return SendResult(success=True, message_id=provider_message_id, raw_response=res)
         # Local audio file (or voiceUrl failed) → send as a playable file
         # attachment. zca-js sendVoice can't reliably HEAD the upload URL, so
         # we don't force a voice bubble for local files.
@@ -795,8 +1770,31 @@ class ZaloAdapter(BasePlatformAdapter):
             {"threadId": chat_id, "threadType": thread_type, "path": audio_path},
         )
         if res2.get("error"):
-            return SendResult(success=False, error=res2["error"])
-        return SendResult(success=True)
+            return SendResult(success=False, error=res2["error"], raw_response=res2, retryable=False)
+        provider_message_id = _explicit_provider_message_id(res2)
+        if provider_message_id:
+            path = Path(str(audio_path))
+            try:
+                size_bytes = path.stat().st_size
+            except OSError:
+                size_bytes = None
+            self._store_outbound(
+                chat_id=str(chat_id),
+                thread_type=thread_type,
+                text=str(caption or ""),
+                provider_message_id=provider_message_id,
+                reply_to=reply_to,
+                attachments=[
+                    {
+                        "kind": "voice",
+                        "filename": path.name,
+                        "size_bytes": size_bytes,
+                        "local_path": str(path),
+                        "download_status": "downloaded",
+                    }
+                ],
+            )
+        return SendResult(success=True, message_id=provider_message_id, raw_response=res2)
 
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
         return {"name": str(chat_id), "type": "dm", "chat_id": str(chat_id)}
@@ -883,6 +1881,47 @@ class ZaloAdapter(BasePlatformAdapter):
         body.update(extra)
         return await self._post("/poll/create", body)
 
+    async def _get_bytes(
+        self,
+        path: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> tuple[bytes, str]:
+        import aiohttp
+
+        if not self._session or self._session.closed:
+            raise RuntimeError("bridge session is not connected")
+        try:
+            async with self._session.get(
+                f"{self.bridge_url}{path}",
+                params=params or {},
+                headers=self._headers(),
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as response:
+                if response.status != 200:
+                    raise RuntimeError(
+                        f"bridge bytes request failed with HTTP {response.status}"
+                    )
+                content_type = str(response.headers.get("Content-Type") or "")
+                if not content_type.lower().startswith("image/png"):
+                    raise RuntimeError("bridge returned a non-PNG QR response")
+                length = int(response.headers.get("Content-Length") or 0)
+                if length > 2 * 1024 * 1024:
+                    raise RuntimeError("QR response exceeds the 2 MiB cap")
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in response.content.iter_chunked(64 * 1024):
+                    total += len(chunk)
+                    if total > 2 * 1024 * 1024:
+                        raise RuntimeError("QR response exceeds the 2 MiB cap")
+                    chunks.append(chunk)
+                return b"".join(chunks), content_type
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(
+                redact_text(str(exc)) or "bridge bytes request failed"
+            ) from exc
+
     async def _get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         import aiohttp
         if not self._session or self._session.closed:
@@ -927,12 +1966,18 @@ def check_requirements() -> bool:
         import aiohttp  # noqa
     except ImportError:
         return False
-    return bool(os.getenv("ZALO_PLUGIN_URL"))
+    token = os.getenv("ZALO_PLUGIN_TOKEN", "")
+    return bool(os.getenv("ZALO_PLUGIN_URL")) and len(token.encode("utf-8")) >= 32
 
 
 def validate_config(config) -> bool:
     extra = getattr(config, "extra", {}) or {}
-    return bool(os.getenv("ZALO_PLUGIN_URL") or extra.get("bridge_url"))
+    try:
+        company = CompanyConfig.from_platform_extra(extra)
+        company.require_runtime_secrets()
+    except (CompanyConfigError, TypeError, ValueError):
+        return False
+    return True
 
 
 def _env_enablement() -> Optional[dict]:
@@ -993,7 +2038,10 @@ def _run_bridge_login() -> bool:
         # Inherit stdio so the ASCII QR renders and the user can scan it.
         return subprocess.run(cmd).returncode == 0
     except Exception as e:
-        logger.warning("Zalo: could not launch bridge login: %s", e)
+        logger.warning(
+            "Zalo: could not launch bridge login: %s",
+            redact_text(str(e)) or "unknown error",
+        )
         return False
 
 
@@ -1090,291 +2138,104 @@ def _pick_ids(items: List[Dict[str, Any]], label: str, prompt_fn, print_fn) -> s
 
 
 def interactive_setup() -> None:
-    """Interactive `hermes gateway setup` flow for Zalo."""
+    """Configure the fail-closed five-person company assistant."""
     from hermes_cli.setup import (
-        prompt,
-        prompt_yes_no,
-        save_env_value,
         get_env_value,
         print_header,
         print_info,
         print_warning,
+        prompt,
+        save_env_value,
     )
 
-    print_header("Zalo")
-    print_info("Connect Hermes to a personal Zalo account via the zca-js bridge.")
-    print_warning("zca-js is an UNOFFICIAL API. Use a secondary account; Zalo may lock automated accounts.")
-    print_info("You must run the companion hermes-zalo-plugin Node service and log in via QR first.")
-    print()
-
-    existing = get_env_value("ZALO_PLUGIN_URL")
-    bridge_url = prompt(
-        "Bridge URL (e.g. http://127.0.0.1:8787)",
-        default=existing or "http://127.0.0.1:8787",
+    print_header("Zalo Company Assistant")
+    print_info(
+        "Khai báo bắt buộc allowlist thành viên, quản trị viên và nhóm công ty. "
+        "Bot luôn lưu group; chỉ mention hợp lệ mới gọi Hermes."
     )
-    if not bridge_url:
-        print_warning("Bridge URL is required — skipping Zalo setup")
-        return
-    save_env_value("ZALO_PLUGIN_URL", bridge_url.strip().rstrip("/"))
 
-    if prompt_yes_no("Set a bridge token (shared secret)?", False):
-        token = prompt("Bridge token", password=True)
-        if token:
-            save_env_value("ZALO_PLUGIN_TOKEN", token)
-
-    print()
-    print_info("Access control: WHO may talk to the bot (Telegram-style)")
-    print_info("Leave selections EMPTY to allow everyone / everywhere.")
-
-    # Probe the bridge first so we can give a precise, actionable diagnosis
-    # instead of a vague "offline/not logged in". Three states matter:
-    #   1) DOWN          → service stopped: offer to start it (safe, no QR)
-    #   2) LOGGED OUT    → session expired: offer to QR-login right now
-    #   3) OK            → auto-list contacts for number-pick
-    bridge = bridge_url.strip().rstrip("/")
-    token = os.getenv("ZALO_PLUGIN_TOKEN", "")
-    cli = _bridge_cli_hint()
-    health = _probe_health(bridge, token)
-
-    if health is None:
-        # State 1: bridge process not reachable.
-        print()
-        print_warning(f"Bridge không phản hồi tại {bridge} (service đang tắt hoặc chưa khởi động).")
-        print_info("Phiên đăng nhập (credentials) vẫn được giữ — chỉ cần bật lại service, KHÔNG cần quét QR lại.")
-        if prompt_yes_no("Bật lại background service ngay bây giờ?", True):
-            import subprocess, shutil
-            svc_cli = "hermes-zalo-plugin" if shutil.which("hermes-zalo-plugin") else None
-            svc_cmd = [svc_cli, "setup", "--service-only"] if svc_cli else ["npx", "hermes-zalo-plugin", "setup", "--service-only"]
-            try:
-                subprocess.run(svc_cmd)
-            except Exception as e:
-                print_warning(f"Không tự bật được service: {e}")
-            # Re-probe after the attempt.
-            import time as _t
-            _t.sleep(2)
-            health = _probe_health(bridge, token)
-            if health is None:
-                print_warning("Bridge vẫn chưa lên. Bật thủ công rồi chạy lại `hermes gateway setup`:")
-                print_info(f"   {cli} setup --service-only        # nếu cài qua npm")
-                print_info("   npm start                         # nếu chạy từ source")
-        else:
-            print_info("Bỏ qua. Khi nào muốn bật: " + f"{cli} setup --service-only  (hoặc `npm start`)")
-
-    if health is not None and (not health.get("loggedIn") or health.get("sessionDead")):
-        # State 2: bridge is up but the Zalo session is dead/logged out.
-        print()
-        print_warning("Bridge đang chạy nhưng phiên Zalo đã ĐĂNG XUẤT / hết hạn.")
-        print_info("Cần đăng nhập lại bằng cách quét mã QR trong app Zalo (Zalo → + → Quét mã QR).")
-        if prompt_yes_no("Quét QR đăng nhập lại ngay bây giờ?", True):
-            if _run_bridge_login():
-                print_info("✓ Đăng nhập lại thành công.")
-                import time as _t
-                _t.sleep(2)
-                health = _probe_health(bridge, token)
-            else:
-                print_warning(f"Đăng nhập chưa xong. Chạy lại sau bằng:  {cli} login")
-        else:
-            print_info(f"Khi nào muốn đăng nhập lại:  {cli} login   (rồi chạy lại `hermes gateway setup`)")
-
-    # Try to fetch a friendly id+name list from the bridge so the user can pick
-    # by number instead of hunting for raw IDs. Falls back to manual entry.
-    contacts = _fetch_contacts(bridge, token) if (health and health.get("loggedIn") and not health.get("sessionDead")) else None
-
-    # A) Allowed senders (users).
-    friends = (contacts or {}).get("friends") or []
-    if friends:
-        users_csv = _pick_ids(
-            friends,
-            "Restrict to specific USERS? Enter numbers (e.g. 1,3) or blank for everyone",
-            prompt, print_info,
+    bridge_url = str(
+        prompt(
+            "Bridge URL (http://127.0.0.1:8787)",
+            default=get_env_value("ZALO_PLUGIN_URL") or "http://127.0.0.1:8787",
         )
-    else:
-        users_csv = prompt(
-            "Allowed user IDs (comma-separated uidFrom, blank = everyone)",
+        or ""
+    ).strip().rstrip("/")
+    token = str(get_env_value("ZALO_PLUGIN_TOKEN") or "").strip()
+    if len(token.encode("utf-8")) < 32:
+        token = str(prompt("Bridge token (ít nhất 32 byte)", password=True) or "").strip()
+
+    users = str(
+        prompt(
+            "Zalo ID thành viên được phép (bắt buộc, phân cách bằng dấu phẩy)",
             default=get_env_value("ZALO_ALLOWED_USERS") or "",
         )
-    save_env_value("ZALO_ALLOWED_USERS", (users_csv or "").strip())
-
-    # B) Allowed threads (groups + DMs).
-    groups = (contacts or {}).get("groups") or []
-    if groups:
-        threads_csv = _pick_ids(
-            groups,
-            "Restrict to specific GROUPS/threads? Enter numbers or blank for everywhere",
-            prompt, print_info,
+        or ""
+    ).strip()
+    admins = str(
+        prompt(
+            "Zalo ID quản trị viên (bắt buộc, phải nằm trong thành viên)",
+            default=get_env_value("ZALO_ADMIN_USERS") or "",
         )
-    else:
-        threads_csv = prompt(
-            "Allowed thread/group IDs (comma-separated, blank = everywhere)",
-            default=get_env_value("ZALO_ALLOWED_THREADS") or "",
+        or ""
+    ).strip()
+    groups = str(
+        prompt(
+            "Zalo ID nhóm công ty (bắt buộc, phân cách bằng dấu phẩy)",
+            default=get_env_value("ZALO_ALLOWED_GROUPS") or "",
         )
-    save_env_value("ZALO_ALLOWED_THREADS", (threads_csv or "").strip())
+        or ""
+    ).strip()
 
-    # C) Group response mode. Only ask when the user picked specific groups.
-    # If they left the group picker blank, that means "no groups" → set group
-    # mode to "off" so the bot never replies in any group, even when @mentioned
-    # (groups opt-in). DMs / 1-1 chats still work.
-    if (threads_csv or "").strip():
-        print_info("In GROUPS, when should the bot respond?")
-        _gm_opts = [
-            ("mention", "Chỉ khi được @nhắc tên hoặc trả lời tin của bot (khuyên dùng)"),
-            ("all", "Mọi tin nhắn trong các nhóm được phép"),
-            ("off", "Không bao giờ trong nhóm (chỉ chat riêng/DM)"),
-        ]
-        for i, (val, desc) in enumerate(_gm_opts, 1):
-            print_info(f"   {i}. {val:<8} — {desc}")
-        _cur_mode = get_env_value("ZALO_GROUP_MODE") or "mention"
-        _cur_idx = next((str(i) for i, (v, _) in enumerate(_gm_opts, 1) if v == _cur_mode), "1")
-        _pick = prompt("Chọn (1/2/3)", default=_cur_idx)
-        try:
-            mode = _gm_opts[int(str(_pick).strip()) - 1][0]
-        except (ValueError, IndexError):
-            # Fall back to accepting the literal word, else default.
-            mode = (str(_pick) or "").strip().lower()
-            if mode not in {"mention", "all", "off"}:
-                mode = "mention"
-        save_env_value("ZALO_GROUP_MODE", mode)
-        print_info(f"   → {mode}")
-    else:
-        # No groups chosen → bot stays out of every group (DMs still work).
-        save_env_value("ZALO_GROUP_MODE", "off")
-        print_info("   → Không chọn nhóm nào → bot sẽ KHÔNG trả lời trong nhóm (kể cả khi @nhắc). Chat 1-1 (DM) vẫn hoạt động.")
-
-    # Discoverability helper: log inbound ids so the user can add more later.
-    if prompt_yes_no("Log sender/thread IDs of incoming messages (to find IDs later)?", False):
-        save_env_value("ZALO_LOG_IDS", "true")
-    else:
-        save_env_value("ZALO_LOG_IDS", "false")
-
-    retention = prompt(
-        "Undo-cache retention in days — how long to keep the msgId→cliMsgId map "
-        "on disk so message recall (thu hồi) works across bridge restarts "
-        "(default 30, 0 to disable persistence)",
-        default=get_env_value("ZALO_CLIMSG_RETENTION_DAYS") or "30",
+    candidate_env = dict(os.environ)
+    candidate_env.update(
+        {
+            "ZALO_PLUGIN_URL": bridge_url,
+            "ZALO_PLUGIN_TOKEN": token,
+            "ZALO_ALLOWED_USERS": users,
+            "ZALO_ADMIN_USERS": admins,
+            "ZALO_ALLOWED_GROUPS": groups,
+            "ZALO_GROUP_MODE": "mention",
+        }
     )
-    if retention is not None and str(retention).strip() != "":
-        try:
-            save_env_value("ZALO_CLIMSG_RETENTION_DAYS", str(int(retention)))
-        except ValueError:
-            print_warning("Invalid number — keeping default 30 days")
+    try:
+        validated = CompanyConfig.from_platform_extra({}, env=candidate_env)
+        validated.require_runtime_secrets()
+    except CompanyConfigError as exc:
+        print_warning(f"Cấu hình chưa hợp lệ, chưa ghi thay đổi: {exc}")
+        return
 
-    print()
-    print_info("🔐 Access control — bot được phép làm những NHÓM hành động nào?")
-    print_info("   Mức độ nguy hiểm tăng dần: read < send < interact < manage < destructive")
-    _ag_opts = [
-        ("read", "Xem — đọc tin, danh bạ, thông tin nhóm/bạn"),
-        ("send", "Gửi — nhắn tin, ảnh, file, sticker, voice"),
-        ("interact", "Tương tác — react, reply, vote/poll, gõ '...'"),
-        ("manage", "Quản lý — thêm/xoá thành viên, đổi tên nhóm, kết bạn"),
-        ("destructive", "NGUY HIỂM — giải tán nhóm, xoá tin, block, rời nhóm, đổi profile"),
-    ]
-    for i, (val, desc) in enumerate(_ag_opts, 1):
-        print_info(f"   {i}. {val:<12} — {desc}")
-    print_info("   6. custom       — Tự chọn TỪNG action cụ thể (chỉ những cái chọn mới chạy, còn lại CHẶN hết)")
-    # Default to the currently-saved set, else the safe preset read,send,interact (1,2,3).
-    _raw_groups = (get_env_value("ZALO_ALLOWED_ACTION_GROUPS") or "").strip()
-    _raw_allowed = (get_env_value("ZALO_ALLOWED_ACTIONS") or "").strip()
-    # Whitelist mode = an explicit allowlist exists AND no groups are enabled.
-    _cur_custom = bool(_raw_allowed) and not _raw_groups
-    _cur = _raw_groups or "read,send,interact"
-    if _cur_custom:
-        _cur_nums = "6"
-    elif _cur.lower() == "all":
-        _cur_nums = "1,2,3,4,5"
-    else:
-        _cur_set = {s.strip() for s in _cur.split(",") if s.strip()}
-        _cur_nums = ",".join(str(i) for i, (v, _) in enumerate(_ag_opts, 1) if v in _cur_set) or "1,2,3"
-    print_info("   Nhập số cách nhau bởi dấu phẩy (vd: 1,2,3), 'all' cho tất cả, hoặc 6 để tự chọn từng action.")
-    _pick = prompt("Chọn nhóm hành động", default=_cur_nums)
-    _pick = (str(_pick) or "").strip()
+    for key, value in (
+        ("ZALO_PLUGIN_URL", validated.bridge_url),
+        ("ZALO_PLUGIN_TOKEN", token),
+        ("ZALO_ALLOWED_USERS", users),
+        ("ZALO_ADMIN_USERS", admins),
+        ("ZALO_ALLOWED_GROUPS", groups),
+        ("ZALO_GROUP_MODE", "mention"),
+    ):
+        save_env_value(key, value)
 
-    _pick_nums = {t.strip() for t in _pick.split(",")}
-    if "6" in _pick_nums or _pick.lower() == "custom":
-        # ── Custom mode: whitelist-only. Pick specific actions; everything else
-        #    is denied. We clear ZALO_ALLOWED_ACTION_GROUPS so no group passes by
-        #    default, and put the picks in ZALO_ALLOWED_ACTIONS.
-        print()
-        print_info("Chế độ CUSTOM (whitelist) — chỉ những action được chọn mới chạy, tất cả còn lại bị chặn.")
-        action_items = [
-            {"id": name, "name": f"{name}  [{grp}]"}
-            for name, grp in sorted(_ACTION_GROUP.items())
-        ]
-        # Seed the picker default selection from any currently-saved allowlist.
-        _picked_csv = _pick_ids(
-            action_items,
-            f"Chọn action cho phép (trong {len(action_items)} API). "
-            "Gõ tên để tìm (vd: send, group, poll), số để tick, 'all' để liệt kê, blank=xong",
-            prompt, print_info,
+    home = str(
+        prompt(
+            "Home thread cho cron (tùy chọn: user:<id> hoặc group:<id>)",
+            default=get_env_value("ZALO_HOME_CHANNEL") or "",
         )
-        allowed = [a.strip() for a in (_picked_csv or "").split(",") if a.strip()]
-        save_env_value("ZALO_ALLOWED_ACTIONS", ",".join(allowed))
-        save_env_value("ZALO_ALLOWED_ACTION_GROUPS", "")  # whitelist-only
-        save_env_value("ZALO_DENIED_ACTIONS", "")          # not needed in whitelist mode
-        # If any picked action is destructive, the bridge still needs the opt-in.
-        has_destructive = any(_ACTION_GROUP.get(a) == "destructive" for a in allowed)
-        if has_destructive:
-            print_warning(
-                "⚠️  Một số action đã chọn thuộc nhóm NGUY HIỂM (destructive). "
-                "Bridge cần bật cờ riêng mới chạy được chúng."
-            )
-            allow_destructive = prompt_yes_no("Cho phép các action NGUY HIỂM đã chọn?", False)
-            save_env_value("ZALO_ALLOW_DESTRUCTIVE", "true" if allow_destructive else "false")
-        else:
-            save_env_value("ZALO_ALLOW_DESTRUCTIVE", "false")
-        print_info(f"   → custom allowlist ({len(allowed)} action): {', '.join(allowed) or '(trống — bot sẽ không làm gì)'}")
-    else:
-        if _pick.lower() == "all":
-            groups_val = "all"
-        else:
-            chosen = []
-            for tok in _pick.split(","):
-                tok = tok.strip()
-                if not tok or tok == "6":
-                    continue
-                try:
-                    chosen.append(_ag_opts[int(tok) - 1][0])
-                except (ValueError, IndexError):
-                    if tok.lower() in {v for v, _ in _ag_opts}:
-                        chosen.append(tok.lower())  # accept literal names too
-            groups_val = ",".join(dict.fromkeys(chosen)) or "read,send,interact"
-        save_env_value("ZALO_ALLOWED_ACTION_GROUPS", groups_val)
-        save_env_value("ZALO_ALLOWED_ACTIONS", "")  # clear any leftover custom allowlist
-        print_info(f"   → {groups_val}")
-
-        # Destructive opt-in only matters when not in whitelist mode.
-        _has_destructive_group = groups_val == "all" or "destructive" in groups_val
-        if _has_destructive_group:
-            print_warning(
-                "⚠️  DESTRUCTIVE actions (giải tán nhóm, xoá tin, block, đổi profile) là "
-                "KHÔNG THỂ HOÀN TÁC. Bất kỳ ai bot nghe đều có thể kích hoạt. Chỉ bật nếu "
-                "bạn hoàn toàn tin tưởng mọi người được phép."
-            )
-            allow_destructive = prompt_yes_no("Cho phép các action NGUY HIỂM (destructive)?", False)
-            save_env_value("ZALO_ALLOW_DESTRUCTIVE", "true" if allow_destructive else "false")
-        else:
-            save_env_value("ZALO_ALLOW_DESTRUCTIVE", "false")
-
-    home = prompt(
-        "Home thread for cron delivery (threadId or group:threadId, optional)",
-        default=get_env_value("ZALO_HOME_CHANNEL") or "",
-    )
+        or ""
+    ).strip()
     if home:
-        save_env_value("ZALO_HOME_CHANNEL", home.strip())
+        save_env_value("ZALO_HOME_CHANNEL", home)
 
-    # ── Next steps: make sure the user always knows how to get a working bot ──
-    print()
-    print_info("─────────────────────────────────────────────")
+    health = _probe_health(validated.bridge_url, token)
+    print_info(
+        "✓ Đã lưu cấu hình company assistant: "
+        f"{len(validated.allowed_users)} thành viên, "
+        f"{len(validated.admin_users)} admin, "
+        f"{len(validated.allowed_groups)} group."
+    )
     if health and health.get("loggedIn") and not health.get("sessionDead"):
-        print_info("✓ Zalo đã sẵn sàng: bridge đang chạy và đã đăng nhập.")
-        print_info("  Chạy:  hermes gateway   → bắt đầu nhận/gửi tin Zalo.")
+        print_info("✓ Bridge đang chạy và đã đăng nhập; chạy `hermes gateway` để bắt đầu.")
     else:
-        print_warning("⚠ Cấu hình Zalo đã lưu, NHƯNG bridge chưa sẵn sàng — bot sẽ chưa hoạt động.")
-        print_info("  Bridge (Node service) phải ĐANG CHẠY và đã đăng nhập thì bot mới chạy được.")
-        print_info(f"  • Kiểm tra:        curl {bridge}/health")
-        print_info(f"  • Bật service:     {cli} setup --service-only   (đã login thì không cần QR)")
-        print_info(f"  • Đăng nhập QR:    {cli} login                  (nếu bị đăng xuất)")
-        print_info("  Xong rồi chạy:  hermes gateway")
-    print_info("─────────────────────────────────────────────")
+        print_info("Bridge chưa sẵn sàng; chạy `hermes-zalo-plugin login` rồi `hermes gateway`.")
 
 
 def is_connected() -> bool:
@@ -1390,13 +2251,12 @@ def register(ctx):
         adapter_factory=lambda cfg: ZaloAdapter(cfg),
         check_fn=check_requirements,
         validate_config=validate_config,
-        required_env=["ZALO_PLUGIN_URL"],
+        required_env=["ZALO_PLUGIN_URL", "ZALO_PLUGIN_TOKEN"],
         install_hint="Run the hermes-zalo-plugin Node service and `pip install aiohttp`",
         setup_fn=interactive_setup,
         env_enablement_fn=_env_enablement,
         cron_deliver_env_var="ZALO_HOME_CHANNEL",
         allowed_users_env="ZALO_ALLOWED_USERS",
-        allow_all_env="ZALO_ALLOW_ALL_USERS",
         max_message_length=4000,
         emoji="",
         pii_safe=False,
@@ -1409,3 +2269,4 @@ def register(ctx):
             "and voice. Messages over ~4000 chars are auto-split."
         ),
     )
+    register_tooling(ctx, _LAZY_TOOLING)

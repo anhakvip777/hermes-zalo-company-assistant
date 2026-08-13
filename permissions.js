@@ -2,6 +2,11 @@
 // Groups by danger level: read < send < interact < manage < destructive.
 export const ACTION_GROUPS = ["read", "send", "interact", "manage", "destructive"];
 export const DEFAULT_GROUPS = ["read", "send", "interact"];
+export const SENSITIVE_ACTIONS = Object.freeze([
+  "getCookie",
+  "getContext",
+  "getQR",
+]);
 export const ACTION_GROUP = {
   "acceptFriendRequest": "manage",
   "addGroupBlockedMember": "destructive",

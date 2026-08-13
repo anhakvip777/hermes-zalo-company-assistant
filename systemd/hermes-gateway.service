@@ -1,0 +1,24 @@
+[Unit]
+Description=Hermes Agent gateway for company Zalo assistant
+Requires=hermes-zalo-company-bridge.service
+After=hermes-zalo-company-bridge.service
+
+[Service]
+Type=simple
+User=hermes-zalo
+Group=hermes-zalo
+WorkingDirectory=/opt/hermes-agent
+EnvironmentFile=/etc/hermes-zalo-company.env
+Environment=HERMES_HOME=/var/lib/hermes-zalo/profile
+UMask=0077
+ExecStart=/usr/local/bin/hermes gateway
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hermes-zalo
+
+[Install]
+WantedBy=multi-user.target

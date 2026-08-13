@@ -10,27 +10,104 @@
 // After this, the end-user only needs:  hermes gateway setup  → choose Zalo.
 
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { logDir } from "./paths.js";
+import { dataDir, logDir, runtimeEnvPath } from "./paths.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
 const has = (f) => argv.includes(f);
 const NO_SERVICE = has("--no-service");
-const RELOGIN = has("--relogin") || has("--force");
+const RELOGIN = has("--relogin");
 const SERVICE_ONLY = has("--service-only");
+const DRY_RUN = has("--dry-run");
+const ASSUME_YES = has("--yes");
+const FORCE = has("--force");
+
+function optionValue(name) {
+  const index = argv.indexOf(name);
+  return index >= 0 && argv[index + 1] && !argv[index + 1].startsWith("--")
+    ? argv[index + 1]
+    : null;
+}
 
 const PLATFORM = process.platform; // 'darwin' | 'linux' | 'win32'
 const NODE_BIN = process.execPath;
 const SERVER_JS = path.join(__dirname, "server.js");
 const LABEL = "com.hermes.zaloplugin";
+let RUNTIME_ENV_FILE = null;
 
 function log(msg) { console.log(msg); }
 function step(n, msg) { console.log(`\n[${n}] ${msg}`); }
 function die(msg) { console.error(`\n✗ ${msg}`); process.exit(1); }
+
+function selectedHermesHome() {
+  return path.resolve(
+    optionValue("--hermes-home") ||
+      process.env.HERMES_HOME ||
+      path.join(os.homedir(), ".hermes"),
+  );
+}
+
+function printDryRun() {
+  const hermesHome = selectedHermesHome();
+  const directory = path.resolve(
+    process.env.ZALO_DATA_DIR || path.join(os.homedir(), ".hermes-zalo"),
+  );
+  const envFile = path.resolve(
+    process.env.ZALO_RUNTIME_ENV_FILE || path.join(directory, "company.env"),
+  );
+  console.log("DRY-RUN: no files, config, credentials, login, or services will be changed.");
+  console.log(`Hermes profile: ${hermesHome}`);
+  console.log(`Plugin target: ${path.join(hermesHome, "plugins", "zalo")}`);
+  console.log(`Config target: ${path.join(hermesHome, "config.yaml")}`);
+  console.log(`Runtime data: ${directory}`);
+  console.log(`Runtime env: ${envFile}`);
+  console.log(`Service install: ${NO_SERVICE ? "no" : "yes"}`);
+  console.log(`Existing targets may be replaced: ${FORCE ? "yes" : "no"}`);
+}
+
+function installTargets() {
+  const hermesHome = selectedHermesHome();
+  return {
+    hermesHome,
+    pluginDir: path.join(hermesHome, "plugins", "zalo"),
+    configPath: path.join(hermesHome, "config.yaml"),
+  };
+}
+
+function preflightInstall() {
+  const { pluginDir, configPath } = installTargets();
+  if (fs.existsSync(pluginDir) && !FORCE) {
+    die(`Plugin target already exists: ${pluginDir}. Re-run with --force to back it up and replace it.`);
+  }
+  if (fs.existsSync(configPath) && !FORCE) {
+    die(`Hermes config already exists: ${configPath}. Re-run with --force to back it up before modification.`);
+  }
+}
+
+function backupExistingTargets() {
+  const { hermesHome, pluginDir, configPath } = installTargets();
+  if (!fs.existsSync(pluginDir) && !fs.existsSync(configPath)) return null;
+  const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "");
+  const backupDir = path.join(hermesHome, "backups");
+  fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+  if (fs.existsSync(configPath)) {
+    fs.copyFileSync(configPath, path.join(backupDir, `${stamp}-config.yaml`));
+  }
+  if (fs.existsSync(pluginDir)) {
+    fs.cpSync(pluginDir, path.join(backupDir, `${stamp}-plugin`), {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+    });
+  }
+  log(`✓ Backup created: ${backupDir}`);
+  return backupDir;
+}
 
 function run(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, { stdio: "inherit", cwd: __dirname, ...opts });
@@ -42,9 +119,9 @@ function run(cmd, args, opts = {}) {
 function checkPrereqs() {
   // Node version
   const major = parseInt(process.versions.node.split(".")[0], 10);
-  if (major < 18) {
+  if (major < 22) {
     die(
-      `Node >= 18 required (found ${process.version}).\n` +
+      `Node >= 22 required (found ${process.version}).\n` +
       `  Install Node:\n` +
       `    macOS:    brew install node   (or https://nodejs.org)\n` +
       `    Linux:    use nvm (https://github.com/nvm-sh/nvm) or your distro's nodejs package\n` +
@@ -63,6 +140,40 @@ function checkPrereqs() {
     );
   }
   log("✓ npm available");
+}
+
+function ensureRuntimeEnvironment() {
+  const directory = dataDir();
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(directory, 0o700); } catch {}
+  RUNTIME_ENV_FILE = runtimeEnvPath();
+  const existing = fs.existsSync(RUNTIME_ENV_FILE)
+    ? fs.readFileSync(RUNTIME_ENV_FILE, "utf8")
+    : "";
+  const tokenMatch = /^ZALO_PLUGIN_TOKEN=(.+)$/m.exec(existing);
+  const token = process.env.ZALO_PLUGIN_TOKEN || tokenMatch?.[1]?.trim() || randomBytes(32).toString("hex");
+  const host = process.env.ZALO_PLUGIN_HOST || "127.0.0.1";
+  const port = process.env.ZALO_PLUGIN_PORT || "8787";
+  const values = {
+    ZALO_PLUGIN_HOST: host,
+    ZALO_PLUGIN_PORT: port,
+    ZALO_PLUGIN_URL: process.env.ZALO_PLUGIN_URL || `http://${host}:${port}`,
+    ZALO_PLUGIN_TOKEN: token,
+    ZALO_DATA_DIR: process.env.ZALO_DATA_DIR || directory,
+  };
+  const preserved = existing
+    .split(/\r?\n/)
+    .filter((line) => line && !Object.keys(values).some((key) => line.startsWith(key + "=")));
+  const rendered = [
+    "# Private runtime environment for Hermes Zalo company assistant",
+    ...preserved.filter((line) => !line.startsWith("# Private runtime environment")),
+    ...Object.entries(values).map(([key, value]) => `${key}=${value}`),
+    "",
+  ].join("\n");
+  fs.writeFileSync(RUNTIME_ENV_FILE, rendered, { encoding: "utf8", mode: 0o600 });
+  try { fs.chmodSync(RUNTIME_ENV_FILE, 0o600); } catch {}
+  Object.assign(process.env, values, { ZALO_RUNTIME_ENV_FILE: RUNTIME_ENV_FILE });
+  log(`✓ Private runtime env ready: ${RUNTIME_ENV_FILE}`);
 }
 
 // ── 1. Install dependencies (pulls zca-js from npm — no build, no bun) ───────
@@ -133,6 +244,7 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=${__dirname}
+EnvironmentFile=${RUNTIME_ENV_FILE}
 ExecStart=${NODE_BIN} ${SERVER_JS}
 Restart=always
 RestartSec=5
@@ -166,7 +278,7 @@ function installServiceWindows() {
     "/TR", cmd,
     "/RL", "LIMITED",
   ];
-  const r = spawnSync("schtasks", args, { stdio: "inherit", shell: true });
+  const r = spawnSync("schtasks", args, { stdio: "inherit" });
   if (r.status !== 0) {
     log("⚠ Could not register a Scheduled Task automatically. Start the bridge manually with: npm start");
     log("  Or create a task that runs at logon with command:");
@@ -198,7 +310,7 @@ function installHermesPlugin() {
     log("⚠ hermes-plugin/ not found in package — skipping (bridge still works standalone).");
     return;
   }
-  const hermesHome = process.env.HERMES_HOME || path.join(os.homedir(), ".hermes");
+  const hermesHome = selectedHermesHome();
   if (!fs.existsSync(hermesHome)) {
     log(`⚠ Hermes home not found at ${hermesHome}. Is Hermes installed?`);
     log("  Skipping plugin install. After installing Hermes, re-run: npx hermes-zalo-plugin setup --service-only");
@@ -206,9 +318,7 @@ function installHermesPlugin() {
   }
   const dest = path.join(hermesHome, "plugins", "zalo");
   fs.mkdirSync(dest, { recursive: true });
-  for (const f of fs.readdirSync(src)) {
-    fs.copyFileSync(path.join(src, f), path.join(dest, f));
-  }
+  fs.cpSync(src, dest, { recursive: true, force: true });
   log(`✓ Plugin copied to ${dest}`);
 
   // Enable the plugin in config.yaml (plugins.enabled must contain "zalo").
@@ -289,7 +399,7 @@ function nextSteps() {
 ✓ Zalo plugin is set up.
 
   Bridge URL:  http://127.0.0.1:${port}
-  Health:      curl http://127.0.0.1:${port}/health
+  Health:      hermes-zalo-plugin status
 
 Next, register Zalo in Hermes:
   1) hermes gateway setup     → choose "Zalo" (🇻🇳)
@@ -323,20 +433,32 @@ async function main() {
   console.log("Hermes Zalo Plugin — installer");
   console.log("(Safe to re-run: deps are upserted, login is skipped if already logged in,");
   console.log(" and the background service is re-registered cleanly.)\n");
+  if (DRY_RUN) {
+    printDryRun();
+    return;
+  }
+  if (!ASSUME_YES) {
+    die("Refusing side effects without explicit confirmation. Re-run with --yes, or inspect first with --dry-run.");
+  }
+  process.env.HERMES_HOME = selectedHermesHome();
+  preflightInstall();
   checkPrereqs();
+  ensureRuntimeEnvironment();
 
   if (SERVICE_ONLY) {
-    installService();
+    backupExistingTargets();
     installHermesPlugin();
+    if (!NO_SERVICE) installService();
     nextSteps();
     return;
   }
 
   installDeps();
   login();
+  backupExistingTargets();
+  installHermesPlugin();
   if (!NO_SERVICE) installService();
   else log("\n(Skipping background service — run `npm start` to launch the bridge.)");
-  installHermesPlugin();
   nextSteps();
 }
 

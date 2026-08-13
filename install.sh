@@ -13,7 +13,13 @@ cd "$DIR"
 
 if ! command -v node >/dev/null 2>&1; then
   echo "✗ Node.js is required but not found."
-  echo "  Install Node >= 18 from https://nodejs.org (or your package manager), then re-run."
+  echo "  Install Node >= 22 from https://nodejs.org (or your package manager), then re-run."
+  exit 1
+fi
+
+NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
+if [ "$NODE_MAJOR" -lt 22 ]; then
+  echo "✗ Node.js >= 22 is required (found $(node --version))."
   exit 1
 fi
 

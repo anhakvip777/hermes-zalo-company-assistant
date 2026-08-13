@@ -14,7 +14,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { dataDir } from "../paths.js";
+import { dataDir, loadRuntimeEnv } from "../paths.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -22,19 +22,28 @@ const NODE = process.execPath;
 const [, , cmd, ...rest] = process.argv;
 
 function runNode(script, args = []) {
+  const env = loadRuntimeEnv(process.env);
   const r = spawnSync(NODE, [path.join(ROOT, script), ...args], {
     stdio: "inherit",
     cwd: ROOT,
+    env,
   });
   process.exit(r.status ?? 0);
 }
 
 async function status() {
-  const port = process.env.ZALO_PLUGIN_PORT || "8787";
-  const host = process.env.ZALO_PLUGIN_HOST || "127.0.0.1";
+  const env = loadRuntimeEnv(process.env);
+  const port = env.ZALO_PLUGIN_PORT || "8787";
+  const host = env.ZALO_PLUGIN_HOST || "127.0.0.1";
   console.log(`Data directory: ${dataDir()}`);
   try {
-    const res = await fetch(`http://${host}:${port}/health`, { signal: AbortSignal.timeout(3000) });
+    const headers = env.ZALO_PLUGIN_TOKEN
+      ? { Authorization: `Bearer ${env.ZALO_PLUGIN_TOKEN}` }
+      : {};
+    const res = await fetch(`http://${host}:${port}/health`, {
+      headers,
+      signal: AbortSignal.timeout(3000),
+    });
     const j = await res.json();
     console.log(`Bridge: RUNNING on http://${host}:${port}`);
     console.log(`  loggedIn=${j.loggedIn} sessionDead=${j.sessionDead} ownId=${j.ownId || "-"}`);

@@ -6,12 +6,16 @@
 
 | File | Trách nhiệm |
 |---|---|
+| `AGENTS.md` | Điểm vào khôi phục context sau compact/phiên mới; bắt buộc đọc kiến trúc, schema, manifest và checkpoint |
 | `docs/architecture/system-overview.md` | Kiến trúc, trust boundary, data flow |
 | `docs/architecture/database-schema.md` | Schema, invariant, migration |
 | `docs/architecture/file-manifest.md` | Sổ file và checkpoint |
 | `docs/operations/configuration.md` | Cấu hình, secret, allowlist, QR |
 | `docs/operations/acceptance-checklist.md` | Checklist nghiệm thu |
 | `docs/superpowers/specs/2026-08-10-hermes-zalo-admin-web-ui-design.md` | Thiết kế Admin Web UI nhúng trong Hermes Zalo plugin |
+| `docs/superpowers/plans/2026-08-10-hermes-zalo-admin-web-ui.md` | Kế hoạch triển khai Admin Web UI theo TDD |
+| `docs/superpowers/specs/2026-08-09-hermes-zalo-company-assistant-design.md` | Spec trợ lý công ty Hermes trên Zalo |
+| `docs/superpowers/plans/2026-08-09-hermes-zalo-company-assistant.md` | Kế hoạch triển khai trợ lý công ty Hermes trên Zalo |
 | `bridge/config.js` | Đọc/validate bridge config |
 | `bridge/auth.js` | Bearer-token middleware |
 | `bridge/redaction.js` | Redact secret đệ quy |
@@ -43,11 +47,15 @@
 | `tests/integration/test_restart.py` | Restart/dedupe persistence |
 | `pyproject.toml` | Pytest configuration |
 | `requirements-test.txt` | Test dependencies |
+| `requirements-runtime.txt` | Python runtime dependencies được pin riêng khỏi test |
+| `npm-shrinkwrap.json` | Lock dependency tái lập được bên trong runtime npm package |
 | `systemd/hermes-zalo-company-bridge.service` | Node service |
 | `systemd/hermes-gateway.service` | Hermes service |
 | `systemd/hermes-zalo-company.env.example` | Secret/environment template |
 | `scripts/migrate-v1.0.9-config.mjs` | Import config cũ idempotent |
 | `scripts/acceptance.py` | Acceptance runner |
+| `scripts/run-node-tests.mjs` | Chạy Node tests và fail nếu test count bằng 0 |
+| `scripts/build-release.mjs` | Tạo runtime package, source/audit bundle và manifest checksum/traceability |
 
 ## File sửa
 

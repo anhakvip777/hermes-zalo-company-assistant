@@ -9,7 +9,7 @@
 
 import fs from "node:fs";
 import { ZaloClient } from "./zaloClient.js";
-import { credentialsPath, qrPath } from "./paths.js";
+import { credentialsPath, loadRuntimeEnv, qrPath } from "./paths.js";
 
 const force = process.argv.includes("--force") || process.argv.includes("--relogin");
 
@@ -24,10 +24,17 @@ const QR_PATH = qrPath();
 // open a second Zalo connection (Zalo kicks the old one — DuplicateConnection
 // 3000), so we skip login entirely.
 async function bridgeAlreadyLoggedIn() {
-  const port = process.env.ZALO_PLUGIN_PORT || "8787";
-  const host = process.env.ZALO_PLUGIN_HOST || "127.0.0.1";
+  const env = loadRuntimeEnv(process.env);
+  const port = env.ZALO_PLUGIN_PORT || "8787";
+  const host = env.ZALO_PLUGIN_HOST || "127.0.0.1";
   try {
-    const res = await fetch(`http://${host}:${port}/health`, { signal: AbortSignal.timeout(3000) });
+    const headers = env.ZALO_PLUGIN_TOKEN
+      ? { Authorization: `Bearer ${env.ZALO_PLUGIN_TOKEN}` }
+      : {};
+    const res = await fetch(`http://${host}:${port}/health`, {
+      headers,
+      signal: AbortSignal.timeout(3000),
+    });
     if (!res.ok) return false;
     const j = await res.json();
     return !!j.loggedIn && !j.sessionDead;

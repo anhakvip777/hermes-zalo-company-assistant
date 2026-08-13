@@ -39,6 +39,34 @@ def test_bind_requester_restores_nested_context() -> None:
         current_requester()
 
 
+def test_requester_accepts_the_bridge_user_thread_type() -> None:
+    value = Requester(
+        requester_id="u-1",
+        thread_type="user",
+        thread_id="u-1",
+        is_admin=False,
+        session_key="zalo:dm:u-1",
+    )
+    assert value.thread_type == "user"
+
+
+def test_bind_requester_rejects_untyped_values() -> None:
+    with pytest.raises(TypeError, match="Requester"):
+        with bind_requester(object()):
+            pass
+
+
+def test_requester_rejects_malformed_thread_type_cleanly() -> None:
+    with pytest.raises(ValueError, match="thread_type"):
+        Requester(
+            requester_id="u-1",
+            thread_type=[],  # type: ignore[arg-type]
+            thread_id="u-1",
+            is_admin=False,
+            session_key="zalo:dm:u-1",
+        )
+
+
 @pytest.mark.asyncio
 async def test_context_is_isolated_between_concurrent_turns() -> None:
     ready = asyncio.Event()

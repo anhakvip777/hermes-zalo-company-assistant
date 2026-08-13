@@ -11,8 +11,23 @@ import path from "node:path";
 import { credentialsPath } from "./paths.js";
 
 const PURGE = process.argv.includes("--purge");
+const DRY_RUN = process.argv.includes("--dry-run");
+const ASSUME_YES = process.argv.includes("--yes");
 const PLATFORM = process.platform;
 const LABEL = "com.hermes.zaloplugin";
+
+function optionValue(name) {
+  const index = process.argv.indexOf(name);
+  return index >= 0 && process.argv[index + 1] && !process.argv[index + 1].startsWith("--")
+    ? process.argv[index + 1]
+    : null;
+}
+
+function selectedHermesHome() {
+  return path.resolve(
+    optionValue("--hermes-home") || process.env.HERMES_HOME || path.join(os.homedir(), ".hermes"),
+  );
+}
 
 function log(m) { console.log(m); }
 
@@ -59,7 +74,7 @@ function removeService() {
 // ~/.hermes/plugins/zalo and drop "zalo-platform" from plugins.enabled. Leaves
 // the rest of config.yaml untouched.
 function removeHermesPlugin() {
-  const hermesHome = process.env.HERMES_HOME || path.join(os.homedir(), ".hermes");
+  const hermesHome = selectedHermesHome();
   const dest = path.join(hermesHome, "plugins", "zalo");
   if (fs.existsSync(dest)) {
     fs.rmSync(dest, { recursive: true, force: true });
@@ -79,6 +94,22 @@ function removeHermesPlugin() {
     log(`⚠ Could not edit config.yaml: ${e.message}`);
     log('  Manually remove "zalo-platform" from plugins.enabled in ~/.hermes/config.yaml');
   }
+}
+
+function restoreBackup(stamp) {
+  const hermesHome = selectedHermesHome();
+  const backupDir = path.join(hermesHome, "backups");
+  const pluginBackup = path.join(backupDir, `${stamp}-plugin`);
+  const configBackup = path.join(backupDir, `${stamp}-config.yaml`);
+  if (!fs.existsSync(pluginBackup) || !fs.existsSync(configBackup)) {
+    throw new Error(`backup is incomplete: ${stamp}`);
+  }
+  const pluginDir = path.join(hermesHome, "plugins", "zalo");
+  fs.rmSync(pluginDir, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(pluginDir), { recursive: true });
+  fs.cpSync(pluginBackup, pluginDir, { recursive: true, force: false });
+  fs.copyFileSync(configBackup, path.join(hermesHome, "config.yaml"));
+  log(`✓ Restored backup ${stamp} into ${hermesHome}`);
 }
 
 // Dependency-free, idempotent: strip "zalo-platform" from plugins.enabled,
@@ -156,6 +187,23 @@ function removeBinLink() {
 }
 
 console.log("Hermes Zalo Plugin — uninstaller\n================================");
+if (DRY_RUN) {
+  const home = selectedHermesHome();
+  console.log("DRY-RUN: no services, plugins, config, links, or credentials will be changed.");
+  console.log(`Hermes profile: ${home}`);
+  console.log(`Plugin target: ${path.join(home, "plugins", "zalo")}`);
+  console.log(`Purge credentials: ${PURGE ? "yes" : "no"}`);
+  process.exit(0);
+}
+if (!ASSUME_YES) {
+  console.error("Refusing side effects without --yes. Inspect first with --dry-run.");
+  process.exit(1);
+}
+const restoreStamp = optionValue("--restore-backup");
+if (restoreStamp) {
+  restoreBackup(restoreStamp);
+  process.exit(0);
+}
 removeService();
 removeHermesPlugin();
 removeBinLink();

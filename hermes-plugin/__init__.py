@@ -1,3 +1,3 @@
-from .adapter import register
+from .adapter import ZaloAdapter, register
 
-__all__ = ["register"]
+__all__ = ["ZaloAdapter", "register"]

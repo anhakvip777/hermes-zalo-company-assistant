@@ -1,7 +1,7 @@
 # Thiết kế Admin Web UI cho Hermes Zalo
 
 - Ngày khóa thiết kế: 2026-08-10
-- Trạng thái: đã duyệt để ghi spec, chờ duyệt file trước khi lập kế hoạch triển khai
+- Trạng thái: đã duyệt spec và kế hoạch; implementation đã hoàn tất trong working tree, đang nghiệm thu runtime production
 - Thiết kế nền: `2026-08-09-hermes-zalo-company-assistant-design.md`
 
 ## 1. Mục tiêu
