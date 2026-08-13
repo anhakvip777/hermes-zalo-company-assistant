@@ -89,7 +89,10 @@ test("official release builder requires the version tag at HEAD", () => {
 
 test("allow-dirty always labels the artifact as a pre-release", () => {
   const source = fs.readFileSync(path.join(ROOT, "scripts", "build-release.mjs"), "utf8");
-  assert.match(source, /release_status:\s*allowDirty\s*\|\|\s*status/);
+  assert.match(
+    source,
+    /release_status:\s*ciRelease\s*\|\|\s*\(!allowDirty\s*&&\s*!status\)/,
+  );
 });
 
 
@@ -98,6 +101,16 @@ test("source audit bundle is built from the committed Git tree", () => {
   assert.match(source, /git["'], \["archive", "--format=tar\.gz"/);
   assert.match(source, /"HEAD"/);
   assert.doesNotMatch(source, /run\("tar", \[/);
+});
+
+
+test("CI release mode requires an attested matching tag and commit", () => {
+  const source = fs.readFileSync(path.join(ROOT, "scripts", "build-release.mjs"), "utf8");
+  assert.match(source, /--ci-release/);
+  assert.match(source, /GITHUB_REF_NAME/);
+  assert.match(source, /GITHUB_SHA/);
+  assert.match(source, /GITHUB_RUN_ID/);
+  assert.match(source, /CI release attestation/i);
 });
 
 
@@ -121,7 +134,7 @@ test("CI builds and uploads official artifacts only from a version tag", () => {
   const workflow = fs.readFileSync(path.join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
   assert.match(workflow, /tags:\s*\[?["']?v\*/);
   assert.match(workflow, /refs\/tags\/v/);
-  assert.match(workflow, /node scripts\/build-release\.mjs/);
+  assert.match(workflow, /node scripts\/build-release\.mjs --ci-release/);
   assert.match(workflow, /actions\/upload-artifact@v4/);
   assert.match(workflow, /GITHUB_RUN_ID/);
 });

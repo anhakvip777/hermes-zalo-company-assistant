@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const argv = process.argv.slice(2);
 const allowDirty = argv.includes("--allow-dirty");
+const ciRelease = argv.includes("--ci-release");
 const HERMES_VERSION = "0.19.0";
 const HERMES_COMMIT = "eb52760564dbba2e5971fa54bd67384e281cd3b8";
 const HERMES_REQUIRED_CONTRACTS = [
@@ -54,7 +55,7 @@ if (gitProbe.status !== 0 || gitProbe.stdout.trim() !== "true") {
 }
 
 const status = run("git", ["status", "--porcelain"]);
-if (status && !allowDirty) {
+if (status && !allowDirty && !ciRelease) {
   console.error("Working tree is not clean. Commit/tag the reviewed source first, or use --allow-dirty for a clearly marked pre-release audit bundle.");
   process.exit(2);
 }
@@ -65,7 +66,16 @@ const commit = run("git", ["rev-parse", "HEAD"]);
 const tag = run("git", ["tag", "--points-at", "HEAD"]);
 const tags = tag ? tag.split(/\r?\n/) : [];
 const expectedTag = `v${version}`;
-if (!allowDirty && !tags.includes(expectedTag)) {
+if (ciRelease) {
+  const attested = process.env.GITHUB_REF_NAME === expectedTag
+    && process.env.GITHUB_SHA === commit
+    && Boolean(process.env.GITHUB_REPOSITORY)
+    && Boolean(process.env.GITHUB_RUN_ID);
+  if (!attested) {
+    console.error("CI release attestation failed: tag, commit, repository, or run ID does not match.");
+    process.exit(2);
+  }
+} else if (!allowDirty && !tags.includes(expectedTag)) {
   console.error(
     `An official release must be built from tag ${expectedTag} at HEAD. ` +
     "Create and push the reviewed version tag, or use --allow-dirty for a pre-release audit bundle.",
@@ -97,7 +107,7 @@ try {
   const manifest = {
     schema: "hermes-zalo-release-v1",
     generated_at: new Date().toISOString(),
-    release_status: allowDirty || status ? "pre-release-dirty" : "release-clean",
+    release_status: ciRelease || (!allowDirty && !status) ? "release-clean" : "pre-release-dirty",
     version,
     git: { commit, tags, clean: !status },
     compatibility: {
@@ -112,10 +122,10 @@ try {
       os: `${os.platform()} ${os.release()} ${os.arch()}`,
     },
     verification: {
-      expected_node_tests: 64,
+      expected_node_tests: 65,
       expected_python_tests_including_integration: 202,
       expected_integration_subset: 17,
-      ci_evidence: allowDirty || status
+      ci_evidence: !ciRelease && (allowDirty || status)
         ? { status: "not-available", reason: "dirty pre-release" }
         : process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
           ? {

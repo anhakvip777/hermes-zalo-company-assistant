@@ -97,8 +97,12 @@ jobs:
 
       - name: Build tagged release artifacts
         env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_RUN_ID: ${{ github.run_id }}
-        run: node scripts/build-release.mjs --output release
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+        run: node scripts/build-release.mjs --ci-release --output release
 
       - name: Upload release artifacts and provenance manifest
         uses: actions/upload-artifact@v4
