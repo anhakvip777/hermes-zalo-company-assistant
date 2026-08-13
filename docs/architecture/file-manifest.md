@@ -78,6 +78,7 @@
 | `README.md` | Tài liệu tiếng Anh vận hành |
 | `README.vi.md` | Tài liệu tiếng Việt vận hành |
 | `.github/workflows/ci.yml` | Node/Python/integration/security checks |
+| `.github/workflows/publish.yml` | Npm publish thủ công; không tự chạy theo tag của fork nội bộ |
 | `.gitignore` | DB, media, credential, QR, cache |
 | `.npmignore` | Loại state/secret/test khỏi package |
 

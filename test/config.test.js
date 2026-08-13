@@ -93,6 +93,21 @@ test("allow-dirty always labels the artifact as a pre-release", () => {
 });
 
 
+test("source audit bundle is built from the committed Git tree", () => {
+  const source = fs.readFileSync(path.join(ROOT, "scripts", "build-release.mjs"), "utf8");
+  assert.match(source, /git["'], \["archive", "--format=tar\.gz"/);
+  assert.match(source, /"HEAD"/);
+  assert.doesNotMatch(source, /run\("tar", \[/);
+});
+
+
+test("npm publishing is manual for this internal fork", () => {
+  const workflow = fs.readFileSync(path.join(ROOT, ".github", "workflows", "publish.yml"), "utf8");
+  assert.match(workflow, /workflow_dispatch/);
+  assert.doesNotMatch(workflow, /push:\s*\n\s*tags:/);
+});
+
+
 test("CI checks out and tests against the pinned Hermes compatibility commit", () => {
   const workflow = fs.readFileSync(path.join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
   assert.match(workflow, /NousResearch\/hermes-agent/);

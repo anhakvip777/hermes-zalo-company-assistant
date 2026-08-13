@@ -1,6 +1,7 @@
-name: Publish to npm
+name: Publish to npm (manual only)
 
-# Publishes on version tags (v*). Authenticates with an npm access token
+# Manual-only workflow for an explicitly configured npm release. It is not
+# triggered by Git tags in this internal fork. Authenticates with an npm token
 # (NPM_TOKEN secret) and attaches build provenance via GitHub OIDC, so every
 # release is cryptographically attested to this repo + workflow — yet the first
 # publish works with no npmjs-side pre-configuration (unlike tokenless OIDC,
@@ -21,9 +22,7 @@ name: Publish to npm
 #   - Bump runner to Node 24 (Trusted Publishing needs npm >= 11.5.1), drop the
 #     NODE_AUTH_TOKEN env below, and delete the NPM_TOKEN secret.
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
 
 # A tag is immutable, but guard against overlapping re-runs publishing twice.
 concurrency:

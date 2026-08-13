@@ -2,7 +2,7 @@
 
 ## Phiên bản Hermes bắt buộc
 
-Official release `1.1.0` được kiểm thử với Hermes Agent `0.19.0` tại commit
+Official release `1.1.1` được kiểm thử với Hermes Agent `0.19.0` tại commit
 `eb52760564dbba2e5971fa54bd67384e281cd3b8`. Không chỉ đối chiếu chuỗi version:
 runtime phải có `PlatformEntry.env_enablement_fn` và
 `MessageEvent.channel_context`. Trước triển khai, kiểm tra `hermes --version`

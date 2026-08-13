@@ -89,13 +89,7 @@ try {
 
   const sourceName = `hermes-zalo-company-${version}-source-audit.tgz`;
   const sourcePath = path.join(output, sourceName);
-  run("tar", [
-    "-czf", sourcePath,
-    "--exclude=.git", "--exclude=.gitnexus", "--exclude=.codegraph",
-    "--exclude=.agents", "--exclude=.claude", "--exclude=.codex",
-    "--exclude=node_modules", "--exclude=.pytest_cache", "--exclude=__pycache__",
-    "--exclude=*.pyc", "--exclude=release", "--exclude=*.tgz", ".",
-  ]);
+  run("git", ["archive", "--format=tar.gz", `--output=${sourcePath}`, "HEAD"]);
 
   const commandVersion = (command, args) => {
     try { return run(command, args).split(/\r?\n/)[0]; } catch { return "unavailable"; }
@@ -118,7 +112,7 @@ try {
       os: `${os.platform()} ${os.release()} ${os.arch()}`,
     },
     verification: {
-      expected_node_tests: 62,
+      expected_node_tests: 64,
       expected_python_tests_including_integration: 202,
       expected_integration_subset: 17,
       ci_evidence: allowDirty || status

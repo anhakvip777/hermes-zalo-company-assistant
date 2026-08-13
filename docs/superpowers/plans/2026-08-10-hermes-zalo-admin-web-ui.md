@@ -12,6 +12,14 @@
 
 ## Checkpoint phiên làm việc
 
+- Cập nhật 2026-08-13 sau tag `v1.1.0`: compatibility matrix Windows/Ubuntu/
+  macOS đều pass nhưng job artifact thất bại trong bước builder trên Ubuntu;
+  workflow npm cũ của upstream cũng tự chạy và fail trước publish. Không di
+  chuyển tag bất biến `v1.1.0`. Bản sửa là `1.1.1`: source audit dùng
+  `git archive HEAD` để đóng đúng committed tree xuyên nền tảng; npm publish
+  chuyển sang `workflow_dispatch` thủ công để tag nội bộ không publish nhầm.
+  Việc tiếp theo: full verification, commit/push, chờ CI branch pass, tag
+  `v1.1.1` và xác minh artifact/manifest từ tag CI.
 - Cập nhật release-hardening ngày 2026-08-13: policy trusted-team cho phép mọi
   `allowed_users` đọc history của mọi `allowed_groups` đã được ghi rõ; họ vẫn
   không thể đọc DM người khác, export/xóa history, đổi retention hoặc dùng
