@@ -87,6 +87,12 @@ test("official release builder requires the version tag at HEAD", () => {
 });
 
 
+test("allow-dirty always labels the artifact as a pre-release", () => {
+  const source = fs.readFileSync(path.join(ROOT, "scripts", "build-release.mjs"), "utf8");
+  assert.match(source, /release_status:\s*allowDirty\s*\|\|\s*status/);
+});
+
+
 test("CI checks out and tests against the pinned Hermes compatibility commit", () => {
   const workflow = fs.readFileSync(path.join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
   assert.match(workflow, /NousResearch\/hermes-agent/);

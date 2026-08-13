@@ -103,7 +103,7 @@ try {
   const manifest = {
     schema: "hermes-zalo-release-v1",
     generated_at: new Date().toISOString(),
-    release_status: status ? "pre-release-dirty" : "release-clean",
+    release_status: allowDirty || status ? "pre-release-dirty" : "release-clean",
     version,
     git: { commit, tags, clean: !status },
     compatibility: {
@@ -118,10 +118,10 @@ try {
       os: `${os.platform()} ${os.release()} ${os.arch()}`,
     },
     verification: {
-      expected_node_tests: 61,
+      expected_node_tests: 62,
       expected_python_tests_including_integration: 202,
       expected_integration_subset: 17,
-      ci_evidence: status
+      ci_evidence: allowDirty || status
         ? { status: "not-available", reason: "dirty pre-release" }
         : process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
           ? {

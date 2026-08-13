@@ -22,16 +22,18 @@
   cho official build khi HEAD có tag đúng `v<package.version>`. CI checkout
   exact Hermes commit, chạy compatibility/full suite, chạy trên tag `v*`, ghi
   CI run ID/URL vào manifest và upload artifact.
-- Kiểm thử fresh sau hardening: Node `61/61`, toàn bộ Python `202/202`,
+- Kiểm thử fresh sau hardening: Node `62/62`, toàn bộ Python `202/202`,
   integration `17/17`, full acceptance `ok: true`, `npm audit --omit=dev` có
   0 vulnerability, `pip check` sạch và `git diff --check` exit `0`. Contract
   test chạy bằng Python venv của chính Hermes commit mục tiêu đạt `2/2`.
   Pre-release artifact mới không có path runtime/state bị cấm; quét secret chỉ
   bắt Bearer giả trong regression test. Migration vẫn có SHA-256 khóa
   `1bc42abea11f4480d7a513cb4ddd2ee9d6986d1449d5a939aed14e59c161e42a`.
-  Việc tiếp theo: gom source đã duyệt thành release commit sạch, tạo/push tag
-  `v1.1.0`, chờ CI tag pass rồi dùng artifact/checksum do CI upload làm official
-  release. Không dùng pre-release dirty làm artifact chính thức.
+  Release commit cục bộ đầu tiên là `e3558503476c8cc1fdd023594fe5b0abaed89ba6`;
+  sau commit đã bổ sung regression để mọi build dùng `--allow-dirty` luôn mang
+  nhãn pre-release, kể cả checkout sạch. Việc tiếp theo: commit regression cuối,
+  tạo/push tag `v1.1.0`, chờ CI tag pass rồi dùng artifact/checksum do CI upload
+  làm official release. Không dùng pre-release làm artifact chính thức.
 - Cập nhật: 2026-08-13, hardening production cho mô hình trusted-team đã được
   chủ dự án và tester chấp nhận có điều kiện. Method credential/session/QR được
   chặn không phân biệt hoa thường; live/unknown method chưa có trong bảng phân
