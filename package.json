@@ -61,12 +61,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/cuongdev/hermes-zalo-plugin.git"
+    "url": "git+https://github.com/anhakvip777/hermes-zalo-company-assistant.git"
   },
   "bugs": {
-    "url": "https://github.com/cuongdev/hermes-zalo-plugin/issues"
+    "url": "https://github.com/anhakvip777/hermes-zalo-company-assistant/issues"
   },
-  "homepage": "https://github.com/cuongdev/hermes-zalo-plugin#readme",
+  "homepage": "https://github.com/anhakvip777/hermes-zalo-company-assistant#readme",
   "dependencies": {
     "express": "^4.21.2",
     "qrcode": "^1.5.4",

@@ -12,6 +12,18 @@
 
 ## Checkpoint phiên làm việc
 
+- Cập nhật release `v1.1.3` ngày 2026-08-13: repo sạch ban đầu tại commit
+  `89e3d17787d1562f98835495f427c3d542a162e8`; phát hiện manifest khai sai số
+  Node test kỳ vọng `66` trong khi thực tế là `65`, đồng thời metadata npm còn
+  trỏ về upstream. Đã thêm regression test, sửa số liệu manifest thành `65` và
+  trỏ repository/bugs/homepage về
+  `anhakvip777/hermes-zalo-company-assistant`. Verification trước commit: Node
+  `65/65`, Python gồm integration `202/202`, full acceptance `ok: true`,
+  `npm audit --omit=dev` có 0 vulnerability, `pip check` sạch, `git diff
+  --check` exit `0`; migration giữ checksum khóa
+  `1bc42abea11f4480d7a513cb4ddd2ee9d6986d1449d5a939aed14e59c161e42a`.
+  Việc tiếp theo: chạy lại full verification sau cập nhật checkpoint, commit và
+  push, tạo/push tag `v1.1.3`, rồi xác minh CI tag và artifact provenance.
 - Cập nhật 2026-08-13 sau tag `v1.1.0`: compatibility matrix Windows/Ubuntu/
   macOS đều pass nhưng job artifact thất bại trong bước builder trên Ubuntu;
   workflow npm cũ của upstream cũng tự chạy và fail trước publish. Không di

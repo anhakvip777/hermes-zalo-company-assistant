@@ -75,6 +75,7 @@ test("release manifest pins the exact Hermes commit and required API contracts",
   assert.match(source, /eb52760564dbba2e5971fa54bd67384e281cd3b8/);
   assert.match(source, /PlatformEntry\.env_enablement_fn/);
   assert.match(source, /MessageEvent\.channel_context/);
+  assert.match(source, /expected_node_tests:\s*65/);
   assert.doesNotMatch(source, /hermes_agent:\s*"0\.19\.0"/);
 });
 
@@ -148,6 +149,7 @@ test("npm package and Hermes plugin publish the same version", () => {
   const match = /^version:\s*([^\s]+)\s*$/m.exec(pluginYaml);
   assert.ok(match);
   assert.equal(packageJson.version, match[1]);
+  assert.equal(packageJson.repository.url, "git+https://github.com/anhakvip777/hermes-zalo-company-assistant.git");
 });
 
 

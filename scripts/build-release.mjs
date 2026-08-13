@@ -131,7 +131,7 @@ try {
       os: `${os.platform()} ${os.release()} ${os.arch()}`,
     },
     verification: {
-      expected_node_tests: 66,
+      expected_node_tests: 65,
       expected_python_tests_including_integration: 202,
       expected_integration_subset: 17,
       ci_evidence: !ciRelease && (allowDirty || status)
