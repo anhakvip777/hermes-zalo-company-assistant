@@ -183,6 +183,13 @@ Web UI được nhúng trực tiếp trong Hermes Zalo plugin, không phải ser
 không tạo schema/migration mới. UI chỉ bind `127.0.0.1` và production phải mở qua
 HTTPS reverse proxy.
 
+Giao diện quản trị dùng phong cách terminal responsive, hỗ trợ chế độ theo hệ
+điều hành/sáng/tối và sidebar có thể thu gọn. Trình duyệt chỉ lưu hai preference
+giao diện đã version hóa; password, session, CSRF và dữ liệu công ty không được
+lưu trong `localStorage`. Khuyên dùng bản Chrome, Edge, Firefox hoặc Safari còn
+được nhà cung cấp cập nhật. Bản redesign không đổi API, database hoặc permission.
+Nếu thiếu asset `admin_web`, plugin sẽ fail startup; hãy cài lại package đầy đủ.
+
 Các biến service environment:
 
 ```text

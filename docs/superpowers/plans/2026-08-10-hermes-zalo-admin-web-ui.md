@@ -12,6 +12,40 @@
 
 ## Checkpoint phiên làm việc
 
+- **Checkpoint sau compact — 2026-08-13:** Terminal redesign Admin Web đang nằm trong
+  working tree chưa commit, trên branch `company-assistant-v1`. Kiến trúc không đổi:
+  `AdminWebApp` trong `hermes-plugin/admin.py` chạy cùng Hermes plugin; browser chỉ
+  tải `hermes-plugin/admin_web/index.html`, `admin.css`, `app.js` cùng origin; không
+  thêm process, route business, database hay permission. Trust boundary vẫn là
+  Node bridge sở hữu `zca-js`, Python adapter/Hermes xử lý session, và Admin Guard
+  bảo vệ thao tác quản trị.
+- **Database bất biến:** SQLite vẫn sáu bảng (`schema_migrations`, `conversations`,
+  `messages`, `message_events`, `attachments`, `tool_activity`); không sửa
+  `hermes-plugin/migrations/001_initial.sql`; SHA-256 khóa
+  `1bc42abea11f4480d7a513cb4ddd2ee9d6986d1449d5a939aed14e59c161e42a`.
+- **File đã tạo/sửa trong lượt UI:** `hermes-plugin/admin_web/index.html`,
+  `hermes-plugin/admin_web/admin.css`, `hermes-plugin/admin_web/app.js`,
+  `hermes-plugin/admin.py`, `tests/python/test_tooling.py`, `test/config.test.js`,
+  `package.json`, `README.md`, `README.vi.md`,
+  `docs/architecture/file-manifest.md`, `docs/operations/acceptance-checklist.md`,
+  `docs/superpowers/plans/2026-08-13-hermes-zalo-admin-web-terminal-redesign.md`.
+  Tất cả đều có trong file manifest; không có file ngoài danh sách.
+- **Việc đã làm và bằng chứng:** UI terminal đã hoàn thiện login/theme, sidebar
+  responsive, overview, access/allowlist draft, history, QR/log/activity/danger
+  zone, loading/error/401/409, modal focus trap, cleanup state nhạy cảm, QR error
+  path tiếng Việt, guard response muộn cho hội thoại/thành viên nhóm và asset
+  `no-cache` để browser revalidate sau deploy. Node
+  `67/67`, Python toàn bộ gồm integration `227 passed`, Admin Web `88 passed`;
+  full/static acceptance `ok: true`; npm audit `0 vulnerabilities`; pip check
+  sạch; package dry-run có đủ ba asset; migration checksum vẫn khóa. Browser fake
+  runtime xác nhận desktop render; lượt browser re-check ba viewport trong phiên
+  này timeout sau reload nên không coi đó là bằng chứng QA mới.
+- **Việc tiếp theo:** kiểm tra trực quan lại 1280×720, 768×900, 390×844 khi browser
+  runtime ổn định, review diff cuối, rồi chờ người dùng chọn commit, push/PR hoặc
+  phát hành. Khi compact/phiên mới phải đọc `AGENTS.md`, `system-overview.md`,
+  `database-schema.md`, `file-manifest.md` và checkpoint này trước khi sửa; không
+  sửa API/database/migration hay tạo file ngoài manifest.
+
 - Official release `v1.1.4` hoàn tất ngày 2026-08-13 tại commit
   `017ae3497dd8cffcb55c3a76bda7360301d2b6e2`. CI tag run
   `31681198848` PASS: matrix Ubuntu/macOS/Windows `3/3` và job

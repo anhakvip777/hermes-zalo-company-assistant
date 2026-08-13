@@ -58,6 +58,9 @@
 | `scripts/acceptance.py` | Acceptance runner |
 | `scripts/run-node-tests.mjs` | Chạy Node tests và fail nếu test count bằng 0 |
 | `scripts/build-release.mjs` | Tạo runtime package, source/audit bundle và manifest checksum/traceability |
+| `hermes-plugin/admin_web/index.html` | App shell, login, sidebar, topbar và vùng render của Admin Web |
+| `hermes-plugin/admin_web/admin.css` | Theme terminal, component, responsive và accessibility |
+| `hermes-plugin/admin_web/app.js` | API client, UI state, navigation và renderer bốn màn hình |
 
 ## File sửa
 

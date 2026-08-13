@@ -17,7 +17,12 @@
 - Migration bất biến: `hermes-plugin/migrations/001_initial.sql` với SHA-256
   `1bc42abea11f4480d7a513cb4ddd2ee9d6986d1449d5a939aed14e59c161e42a`.
 - Static acceptance trước kế hoạch: `ok: true`; working tree chỉ chứa tài liệu kế hoạch/manifest trong lượt này.
-- Việc tiếp theo sau khi kế hoạch được duyệt: thực thi Task 1 bằng TDD; không tạo file ngoài manifest và không sửa API/database.
+- Task 1–12 hoàn tất trong working tree chưa commit: Admin Web tách thành ba asset cùng origin (`index.html`, `admin.css`, `app.js`); backend chỉ phục vụ hai asset cố định, asset lạ trả `404`, CSP không có `unsafe-inline`; không thay API, database, phân quyền hay migration.
+- UI terminal đã có login/theme, sidebar desktop/tablet/mobile, dashboard, danh bạ/allowlist draft guard, history split view + tìm kiếm message + nút quay lại mobile, QR/log/activity/danger-zone dạng MiniTerminal, loading/error/401/409, modal focus-safe và cleanup state nhạy cảm. Kiểm chứng browser fake runtime: 1280×720, 768×900, 390×844; không tràn ngang document; mobile có bottom navigation. Runtime thử nghiệm `localhost:8879` đang phục vụ asset mới.
+- Hardening cuối đã thêm guard cho phản hồi hội thoại/nhóm đến muộn, vô hiệu hóa response sau session expiry, luồng lỗi QR tiếng Việt qua `runAction`, export Blob cleanup trễ, nút Đăng xuất mobile có accessible name và asset CSS/JS `no-cache` để browser revalidate sau deploy. Các thay đổi chỉ nằm ở asset UI/test/header asset đã đăng ký trong manifest; không đổi API, database, migration hoặc permission.
+- Verification mới nhất ngày 2026-08-13: Node `67/67 PASS`; Python toàn bộ gồm integration `227 passed`; Admin Web `88 passed`; full/static acceptance `ok: true`; `npm audit --omit=dev` 0 vulnerabilities; `python -m pip check` sạch; `npm pack --dry-run --json` có đủ 3 asset; `git diff --check` exit 0. Migration vẫn giữ SHA-256 khóa `1bc42abea11f4480d7a513cb4ddd2ee9d6986d1449d5a939aed14e59c161e42a`.
+- Browser fake runtime `localhost:8879` đã được khởi động lại với Hermes venv và xác nhận server trả asset CSS mới `Cache-Control: no-cache`; browser-control timeout lặp lại tại reload nên không được ghi thành PASS trực quan mới cho 1280×720, 768×900, 390×844. CSS/test responsive hiện có vẫn bao phủ ba viewport; cần kiểm tra trực quan lại ba viewport trước khi phát hành chính thức nếu runtime browser khả dụng.
+- Việc tiếp theo: review diff cuối cùng, kiểm tra browser QA ba viewport khi kết nối browser ổn định, rồi commit thay đổi UI trên branch `company-assistant-v1`; sau đó người dùng chọn phát hành/push. Nếu compact, đọc lại `AGENTS.md`, ba tài liệu kiến trúc, manifest này và checkpoint trước khi làm tiếp; không sửa API/database/migration.
 
 ## Bản đồ file
 
@@ -56,7 +61,7 @@
 - Create: `hermes-plugin/admin_web/admin.css`
 - Create: `hermes-plugin/admin_web/app.js`
 
-- [ ] **Bước 1: Viết test Node RED cho runtime package**
+- [x] **Bước 1: Viết test Node RED cho runtime package**
 
 Mở rộng test đầu trong `test/config.test.js`:
 
@@ -64,7 +69,7 @@ Mở rộng test đầu trong `test/config.test.js`:
 assert.ok(packageJson.files.includes("hermes-plugin/admin_web/"));
 ```
 
-- [ ] **Bước 2: Chạy test và xác nhận RED đúng nguyên nhân**
+- [x] **Bước 2: Chạy test và xác nhận RED đúng nguyên nhân**
 
 Run:
 
@@ -74,7 +79,7 @@ Expected:
 
 - Node FAIL vì `package.json.files` chưa chứa `hermes-plugin/admin_web/`.
 
-- [ ] **Bước 3: Đăng ký ba asset trong file manifest**
+- [x] **Bước 3: Đăng ký ba asset trong file manifest**
 
 Thêm ba dòng sau vào bảng **File tạo mới** của
 `docs/architecture/file-manifest.md` trước khi tạo file:
@@ -85,7 +90,7 @@ Thêm ba dòng sau vào bảng **File tạo mới** của
 | `hermes-plugin/admin_web/app.js` | API client, UI state, navigation và renderer bốn màn hình |
 ```
 
-- [ ] **Bước 4: Tạo ba asset tối thiểu để thiết lập seam**
+- [x] **Bước 4: Tạo ba asset tối thiểu để thiết lập seam**
 
 Tạo `hermes-plugin/admin_web/index.html`:
 
@@ -129,13 +134,13 @@ Thêm vào `package.json.files`:
 "hermes-plugin/admin_web/"
 ```
 
-- [ ] **Bước 5: Chạy Node packaging test để xác nhận GREEN**
+- [x] **Bước 5: Chạy Node packaging test để xác nhận GREEN**
 
 Run: `node --test test/config.test.js`
 
 Expected: PASS toàn file.
 
-- [ ] **Bước 6: Chạy static acceptance rồi commit seam asset**
+- [x] **Bước 6: Chạy static acceptance rồi commit seam asset**
 
 Run: `python scripts/acceptance.py --static --json`
 
@@ -154,7 +159,7 @@ git commit -m "test: define admin web asset boundary"
 - Modify: `hermes-plugin/admin.py:676-904,1065-1144`
 - Test: `tests/python/test_tooling.py`
 
-- [ ] **Bước 1: Viết test RED cho ba asset và CSP cùng origin**
+- [x] **Bước 1: Viết test RED cho ba asset và CSP cùng origin**
 
 Thêm test sau vào `tests/python/test_tooling.py`:
 
@@ -206,7 +211,7 @@ python -m pytest -q tests/python/test_tooling.py::test_admin_web_serves_fixed_sa
 
 Expected: FAIL vì asset route chưa tồn tại và trang vẫn chứa inline style/script.
 
-- [ ] **Bước 2: Chuyển script inline nguyên trạng sang `app.js` và đổi helper test**
+- [x] **Bước 2: Chuyển script inline nguyên trạng sang `app.js` và đổi helper test**
 
 Dùng block chính xác trong `hermes-plugin/admin.py` tại commit `bf60ca1`, từ
 dòng bắt đầu `const state=` đến ngay trước `</script>`, làm nguồn cho `app.js`.
@@ -231,7 +236,7 @@ def run_admin_javascript(body: str) -> subprocess.CompletedProcess[bytes]:
     )
 ```
 
-- [ ] **Bước 3: Thay `ADMIN_HTML` inline bằng loader asset cố định**
+- [x] **Bước 3: Thay `ADMIN_HTML` inline bằng loader asset cố định**
 
 Trong `hermes-plugin/admin.py`, thêm gần `_AdminSession`:
 
@@ -258,7 +263,7 @@ từ `<body>` đến trước `<script>`, thêm `<link>`/`<script defer>` đã c
 `#layout`, `#nav`, `#login`, `#password`, `#login-error` và `#app` trong commit
 trung gian. Sau đó xóa chuỗi HTML/CSS/JS inline cũ khỏi `admin.py`.
 
-- [ ] **Bước 4: Thêm đúng hai route public cố định**
+- [x] **Bước 4: Thêm đúng hai route public cố định**
 
 Trong middleware auth và `create_application()`:
 
@@ -297,7 +302,7 @@ async def _admin_js(self, _request: Any):
     )
 ```
 
-- [ ] **Bước 5: Siết CSP trang**
+- [x] **Bước 5: Siết CSP trang**
 
 Đổi header `_page()` thành:
 
@@ -311,7 +316,7 @@ async def _admin_js(self, _request: Any):
 
 Giữ `Cache-Control: no-store` và `X-Content-Type-Options: nosniff`.
 
-- [ ] **Bước 6: Chạy asset/CSP và JavaScript legacy tests**
+- [x] **Bước 6: Chạy asset/CSP và JavaScript legacy tests**
 
 Run:
 
@@ -323,7 +328,7 @@ node --check hermes-plugin/admin_web/app.js
 Expected: asset/CSP PASS và toàn bộ regression JavaScript cũ PASS. Không commit
 Task 2 nếu bất kỳ renderer/helper nào chưa được chuyển đủ sang `app.js`.
 
-- [ ] **Bước 7: Commit asset server**
+- [x] **Bước 7: Commit asset server**
 
 ```powershell
 git add hermes-plugin/admin.py hermes-plugin/admin_web tests/python/test_tooling.py
@@ -339,7 +344,7 @@ git commit -m "feat: serve isolated admin web assets"
 - Modify: `hermes-plugin/admin_web/index.html`
 - Test: `tests/python/test_tooling.py`
 
-- [ ] **Bước 1: Viết HTML semantic đầy đủ nhưng chưa styling**
+- [x] **Bước 1: Viết HTML semantic đầy đủ nhưng chưa styling**
 
 Thay body `index.html` bằng khung cố định sau:
 
@@ -380,7 +385,7 @@ Thay body `index.html` bằng khung cố định sau:
 
 Giữ `<link>` và `<script defer>` trong `<head>`.
 
-- [ ] **Bước 2: Chuyển nguyên API/renderer definitions cũ sang `app.js`**
+- [x] **Bước 2: Chuyển nguyên API/renderer definitions cũ sang `app.js`**
 
 Di chuyển và giữ nguyên signature các hàm đang được regression test:
 
@@ -430,7 +435,7 @@ Nguồn chính xác của body các renderer là `hermes-plugin/admin.py` tại 
 file cơ học: không đổi chuỗi endpoint, query key, request body, retry delay,
 pagination limit hoặc nội dung error trong task này.
 
-- [ ] **Bước 3: Tạo bootstrap sau marker**
+- [x] **Bước 3: Tạo bootstrap sau marker**
 
 Cuối `app.js`:
 
@@ -461,7 +466,7 @@ Mở rộng `testNodes` trong fake DOM harness để các selector mới có nod
 "#toast-root":new FakeNode("div"),
 ```
 
-- [ ] **Bước 4: Chạy toàn bộ regression JavaScript hiện có**
+- [x] **Bước 4: Chạy toàn bộ regression JavaScript hiện có**
 
 Run:
 
@@ -472,13 +477,13 @@ node --check hermes-plugin/admin_web/app.js
 
 Expected: PASS. Endpoint calls và assertion text cũ không đổi.
 
-- [ ] **Bước 5: Chạy toàn bộ test Admin Web backend**
+- [x] **Bước 5: Chạy toàn bộ test Admin Web backend**
 
 Run: `python -m pytest -q tests/python/test_tooling.py -k admin_web`
 
 Expected: PASS.
 
-- [ ] **Bước 6: Commit hành vi parity**
+- [x] **Bước 6: Commit hành vi parity**
 
 ```powershell
 git add hermes-plugin/admin_web tests/python/test_tooling.py
@@ -494,7 +499,7 @@ git commit -m "refactor: move admin web client into static assets"
 - Modify: `hermes-plugin/admin_web/admin.css`
 - Test: `tests/python/test_tooling.py`
 
-- [ ] **Bước 1: Mở rộng fake DOM harness cho preference tests**
+- [x] **Bước 1: Mở rộng fake DOM harness cho preference tests**
 
 Thêm vào harness `run_admin_javascript`:
 
@@ -510,7 +515,7 @@ document.documentElement=new FakeNode("html");
 document.documentElement.dataset={};
 ```
 
-- [ ] **Bước 2: Viết test RED cho preference allowlist**
+- [x] **Bước 2: Viết test RED cho preference allowlist**
 
 ```python
 def test_admin_web_theme_and_sidebar_preferences_are_versioned_and_isolated() -> None:
@@ -532,7 +537,7 @@ Run targeted test.
 
 Expected: FAIL vì preference functions chưa có.
 
-- [ ] **Bước 3: Implement preference functions**
+- [x] **Bước 3: Implement preference functions**
 
 Trong `app.js` trước marker bootstrap:
 
@@ -575,7 +580,7 @@ function updateSidebarLabel(sidebar) {
 Theme button luân phiên `system -> dark -> light -> system`; sidebar button luân
 phiên `expanded <-> collapsed`.
 
-- [ ] **Bước 4: Thêm design token và responsive shell CSS**
+- [x] **Bước 4: Thêm design token và responsive shell CSS**
 
 Trong `admin.css`, định nghĩa đầy đủ các nhóm selector:
 
@@ -593,7 +598,7 @@ Trong `admin.css`, định nghĩa đầy đủ các nhóm selector:
 Bổ sung focus ring `:focus-visible`, `.hidden`, login shell, sidebar, topbar và
 bottom navigation theo token; không hard-code màu nghiệp vụ ngoài token.
 
-- [ ] **Bước 5: Chạy preference test và syntax check**
+- [x] **Bước 5: Chạy preference test và syntax check**
 
 Run:
 
@@ -604,7 +609,7 @@ node --check hermes-plugin/admin_web/app.js
 
 Expected: PASS.
 
-- [ ] **Bước 6: Commit shell/theme**
+- [x] **Bước 6: Commit shell/theme**
 
 ```powershell
 git add hermes-plugin/admin_web tests/python/test_tooling.py
@@ -620,7 +625,7 @@ git commit -m "feat: add persistent admin theme and sidebar"
 - Modify: `hermes-plugin/admin_web/app.js`
 - Test: `tests/python/test_tooling.py`
 
-- [ ] **Bước 1: Viết test RED cho component semantic và safe DOM**
+- [x] **Bước 1: Viết test RED cho component semantic và safe DOM**
 
 ```python
 def test_overview_uses_terminal_status_components_without_dynamic_html() -> None:
@@ -647,7 +652,7 @@ const APP_USES_INNER_HTML=false;
 
 Run targeted test; expected FAIL vì class component chưa có.
 
-- [ ] **Bước 2: Tạo helper component bằng DOM API**
+- [x] **Bước 2: Tạo helper component bằng DOM API**
 
 Trong `app.js`:
 
@@ -669,7 +674,7 @@ function statusCard(label,value,detail,tone="neutral") {
 function badge(text,tone="neutral") { return el("span",text,`badge badge-${tone}`); }
 ```
 
-- [ ] **Bước 3: Render Tổng quan theo mockup đã duyệt**
+- [x] **Bước 3: Render Tổng quan theo mockup đã duyệt**
 
 `renderOverviewEnhanced` phải tạo đúng thứ tự:
 
@@ -688,7 +693,7 @@ app.append(frame);
 
 Quick action chỉ gọi `navigate`; nút QR không gọi POST như regression hiện tại.
 
-- [ ] **Bước 4: Thêm CSS terminal/dashboard**
+- [x] **Bước 4: Thêm CSS terminal/dashboard**
 
 Tạo selector `.terminal-frame`, `.terminal-head`, `.terminal-dot`,
 `.terminal-body`, `.status-grid`, `.status-card`, `.dashboard-grid`,
@@ -698,7 +703,7 @@ Tạo selector `.terminal-frame`, `.terminal-head`, `.terminal-dot`,
 .terminal-frame { border:1px solid transparent;border-radius:18px;background:linear-gradient(var(--surface),var(--surface)) padding-box,linear-gradient(135deg,var(--accent),#568cff88,#e7a63399,#98496288) border-box;box-shadow:var(--shadow-terminal);overflow:hidden; }
 ```
 
-- [ ] **Bước 5: Chạy overview regression**
+- [x] **Bước 5: Chạy overview regression**
 
 Run:
 
@@ -708,7 +713,7 @@ python -m pytest -q tests/python/test_tooling.py -k "overview or enhanced_render
 
 Expected: PASS.
 
-- [ ] **Bước 6: Commit dashboard**
+- [x] **Bước 6: Commit dashboard**
 
 ```powershell
 git add hermes-plugin/admin_web tests/python/test_tooling.py
@@ -724,7 +729,7 @@ git commit -m "feat: redesign admin overview dashboard"
 - Modify: `hermes-plugin/admin_web/app.js`
 - Test: `tests/python/test_tooling.py`
 
-- [ ] **Bước 1: Viết test RED cho draft dirty, beforeunload và stale badge**
+- [x] **Bước 1: Viết test RED cho draft dirty, beforeunload và stale badge**
 
 ```python
 def test_access_draft_guard_and_stale_snapshot_are_explicit() -> None:
@@ -743,7 +748,7 @@ assert.match(nodeText(stale),/Dữ liệu cũ/);
 
 Run targeted test; expected FAIL vì functions chưa có.
 
-- [ ] **Bước 2: Implement normalized draft comparison và unload guard**
+- [x] **Bước 2: Implement normalized draft comparison và unload guard**
 
 ```javascript
 function accessShape(value) {
@@ -771,7 +776,7 @@ function staleNotice(data) {
 
 Bootstrap gắn `window.addEventListener("beforeunload",handleBeforeUnload)`.
 
-- [ ] **Bước 3: Render bảng người và nhóm theo DataTable**
+- [x] **Bước 3: Render bảng người và nhóm theo DataTable**
 
 Mỗi cell có `data-label` để CSS mobile hiển thị label:
 
@@ -788,7 +793,7 @@ function tableCell(label,nodeOrText) {
 Giữ các toggle bằng input checkbox thật với label; không dùng div giả switch.
 Group member detail dùng `replaceChildren` để lần mở sau không nhân đôi danh sách.
 
-- [ ] **Bước 4: Tạo DraftBar và navigation guard**
+- [x] **Bước 4: Tạo DraftBar và navigation guard**
 
 ```javascript
 function draftBar(onSave,onReload) {
@@ -804,13 +809,13 @@ async function guardedNavigate(view) {
 
 Cập nhật nav bootstrap dùng `guardedNavigate`.
 
-- [ ] **Bước 5: Thêm CSS table/card mobile và DraftBar**
+- [x] **Bước 5: Thêm CSS table/card mobile và DraftBar**
 
 Desktop dùng table semantic. Ở `max-width:620px`, ẩn `thead`, mỗi `tr` thành card
 và `td::before { content:attr(data-label) }`. DraftBar sticky trên desktop và
 đứng trên bottom navigation ở mobile.
 
-- [ ] **Bước 6: Chạy access regression**
+- [x] **Bước 6: Chạy access regression**
 
 Run:
 
@@ -820,7 +825,7 @@ python -m pytest -q tests/python/test_tooling.py -k "access or group_members"
 
 Expected: PASS, gồm conflict, lock khi save, unlisted ID và zca friend status.
 
-- [ ] **Bước 7: Commit access UI**
+- [x] **Bước 7: Commit access UI**
 
 ```powershell
 git add hermes-plugin/admin_web tests/python/test_tooling.py
@@ -836,7 +841,7 @@ git commit -m "feat: redesign admin access management"
 - Modify: `hermes-plugin/admin_web/app.js`
 - Test: `tests/python/test_tooling.py`
 
-- [ ] **Bước 1: Viết test RED cho confirm modal không side-effect sớm**
+- [x] **Bước 1: Viết test RED cho confirm modal không side-effect sớm**
 
 ```python
 def test_history_delete_requires_explicit_modal_confirmation() -> None:
@@ -858,7 +863,7 @@ assert.equal(deletes,1);
 
 Run targeted test; expected FAIL vì modal chưa có.
 
-- [ ] **Bước 2: Implement modal focus-safe**
+- [x] **Bước 2: Implement modal focus-safe**
 
 ```javascript
 function confirmModal({title,message,confirmLabel,tone="neutral",onConfirm=async()=>{}}) {
@@ -878,7 +883,7 @@ function confirmModal({title,message,confirmLabel,tone="neutral",onConfirm=async
 
 Bootstrap gắn Escape handler chỉ đóng modal hiện tại, không phát mutation.
 
-- [ ] **Bước 3: Render split view hội thoại**
+- [x] **Bước 3: Render split view hội thoại**
 
 `renderHistoryEnhanced` tạo `.conversation-layout` với:
 
@@ -889,19 +894,19 @@ Bootstrap gắn Escape handler chỉ đóng modal hiện tại, không phát mut
 `renderConversationEnhanced` giữ endpoint, pagination, attachment link và
 thread activity; thêm badge bot/mention/recalled/status bằng helper `badge`.
 
-- [ ] **Bước 4: Nối delete/export vào modal và toast**
+- [x] **Bước 4: Nối delete/export vào modal và toast**
 
 Delete body giữ nguyên filter/confirm contract hiện tại. Export giữ fetch Blob
 và revoke URL; sau success gọi `showToast("Đã tạo file xuất lịch sử","success")`.
 Không retry hai thao tác.
 
-- [ ] **Bước 5: Thêm CSS split/mobile**
+- [x] **Bước 5: Thêm CSS split/mobile**
 
 Desktop `grid-template-columns:300px minmax(0,1fr)`. Mobile xếp dọc, có nút
 `Quay lại danh sách`; message bubble tối đa 78% desktop và 92% mobile, metadata
 luôn nằm ngoài nội dung text.
 
-- [ ] **Bước 6: Chạy history regression**
+- [x] **Bước 6: Chạy history regression**
 
 Run:
 
@@ -911,7 +916,7 @@ python -m pytest -q tests/python/test_tooling.py -k "history or conversation or 
 
 Expected: PASS.
 
-- [ ] **Bước 7: Commit history UI**
+- [x] **Bước 7: Commit history UI**
 
 ```powershell
 git add hermes-plugin/admin_web tests/python/test_tooling.py
@@ -927,7 +932,7 @@ git commit -m "feat: redesign admin conversation history"
 - Modify: `hermes-plugin/admin_web/app.js`
 - Test: `tests/python/test_tooling.py`
 
-- [ ] **Bước 1: Viết test RED cho restart modal và unknown state**
+- [x] **Bước 1: Viết test RED cho restart modal và unknown state**
 
 ```python
 def test_system_restart_waits_for_confirmation_and_shows_pending_state() -> None:
@@ -950,7 +955,7 @@ assert.equal(state.pendingOperation,"restart:gateway");
 
 Run targeted test; expected FAIL.
 
-- [ ] **Bước 2: Implement restart confirmation một lần**
+- [x] **Bước 2: Implement restart confirmation một lần**
 
 ```javascript
 function restartConfirmation(target) {
@@ -972,7 +977,7 @@ function restartConfirmation(target) {
 }
 ```
 
-- [ ] **Bước 3: Render MiniTerminal cho System**
+- [x] **Bước 3: Render MiniTerminal cho System**
 
 Tạo helper:
 
@@ -989,7 +994,7 @@ function miniTerminal(title,tone="neutral") {
 Zone. Giữ các filter/query/pagination hiện tại. Log dùng `textContent`; copy chỉ
 dùng `lastError` đã redact như regression.
 
-- [ ] **Bước 4: QR lifecycle và cleanup Blob URL**
+- [x] **Bước 4: QR lifecycle và cleanup Blob URL**
 
 Giữ `loadQrWithRetry`; bổ sung `releaseQrUrl()` khi logout, session `401`, thay QR
 và `pagehide`:
@@ -998,13 +1003,13 @@ và `pagehide`:
 function releaseQrUrl(){if(state.qrUrl){URL.revokeObjectURL(state.qrUrl);state.qrUrl=null;}}
 ```
 
-- [ ] **Bước 5: Thêm CSS MiniTerminal/log/danger**
+- [x] **Bước 5: Thêm CSS MiniTerminal/log/danger**
 
 Log có `overflow:auto`, `white-space:pre-wrap`, `overflow-wrap:anywhere`.
 Danger dùng token danger và text hậu quả; button không chỉ dựa vào màu để truyền
 trạng thái.
 
-- [ ] **Bước 6: Chạy system/restart/QR regression**
+- [x] **Bước 6: Chạy system/restart/QR regression**
 
 Run:
 
@@ -1014,7 +1019,7 @@ python -m pytest -q tests/python/test_tooling.py -k "system or restart or qr or 
 
 Expected: PASS.
 
-- [ ] **Bước 7: Commit System UI**
+- [x] **Bước 7: Commit System UI**
 
 ```powershell
 git add hermes-plugin/admin_web tests/python/test_tooling.py
@@ -1030,7 +1035,7 @@ git commit -m "feat: redesign admin system controls"
 - Modify: `hermes-plugin/admin_web/app.js`
 - Test: `tests/python/test_tooling.py`
 
-- [ ] **Bước 1: Viết test RED cho skeleton và error shell**
+- [x] **Bước 1: Viết test RED cho skeleton và error shell**
 
 ```python
 def test_admin_web_keeps_shell_for_loading_and_redacted_errors() -> None:
@@ -1047,7 +1052,7 @@ assert.equal(testNodes["#app-shell"].classList.contains?.("hidden")??false,false
 
 Mở rộng fake nodes/classList để có `contains`.
 
-- [ ] **Bước 2: Implement state component**
+- [x] **Bước 2: Implement state component**
 
 ```javascript
 function skeleton(count=4){const root=el("div",undefined,"skeleton-grid");for(let i=0;i<count;i++)root.append(el("span",undefined,"skeleton"));return root;}
@@ -1057,18 +1062,18 @@ function showLoading(view){const app=clearApp(VIEW_TITLES[view]||"Đang tải");
 function showToast(message,tone="neutral"){const root=document.querySelector("#toast-root");const toast=el("div",message,`toast toast-${tone}`);root.replaceChildren(toast);window.setTimeout(()=>{if(root.children?.[0]===toast)root.replaceChildren();},4000);}
 ```
 
-- [ ] **Bước 3: Chuẩn hóa `renderCurrent` error branch**
+- [x] **Bước 3: Chuẩn hóa `renderCurrent` error branch**
 
 `401` phải gọi `releaseQrUrl`, đặt `state.csrf=null`, không ghi storage và gọi
 `showLogin`. `409` hiển thị action **Tải lại cấu hình** nhưng giữ `state.draft`.
 Các lỗi khác dùng `showViewError(error,renderCurrent)`.
 
-- [ ] **Bước 4: Thêm CSS skeleton/state/toast**
+- [x] **Bước 4: Thêm CSS skeleton/state/toast**
 
 Skeleton pulse tắt dưới reduced motion. Error/stale/empty đều có icon + text,
 không chỉ màu. Toast không che bottom nav mobile.
 
-- [ ] **Bước 5: Chạy state regression**
+- [x] **Bước 5: Chạy state regression**
 
 Run:
 
@@ -1078,7 +1083,7 @@ python -m pytest -q tests/python/test_tooling.py -k "pages_show or stale or conf
 
 Expected: PASS.
 
-- [ ] **Bước 6: Commit state UX**
+- [x] **Bước 6: Commit state UX**
 
 ```powershell
 git add hermes-plugin/admin_web tests/python/test_tooling.py
@@ -1096,7 +1101,7 @@ git commit -m "feat: add resilient admin web states"
 - Modify: `docs/operations/acceptance-checklist.md`
 - Test: `tests/python/test_tooling.py`
 
-- [ ] **Bước 1: Viết static accessibility contract RED**
+- [x] **Bước 1: Viết static accessibility contract RED**
 
 ```python
 def test_admin_web_assets_include_accessibility_and_responsive_contracts() -> None:
@@ -1114,7 +1119,7 @@ def test_admin_web_assets_include_accessibility_and_responsive_contracts() -> No
 
 Run targeted test; expected FAIL cho marker còn thiếu.
 
-- [ ] **Bước 2: Hoàn thiện label/focus/modal keyboard**
+- [x] **Bước 2: Hoàn thiện label/focus/modal keyboard**
 
 - Mọi icon-only button có `aria-label` và cập nhật khi state đổi.
 - Modal đặt focus vào nút Hủy, Escape đóng, đóng xong trả focus.
@@ -1122,42 +1127,42 @@ Run targeted test; expected FAIL cho marker còn thiếu.
 - Theme button label gồm state hiện tại và state tiếp theo.
 - Loading/error/mutation dùng đúng vùng live trong HTML.
 
-- [ ] **Bước 3: Hoàn thiện CSS viewport**
+- [x] **Bước 3: Hoàn thiện CSS viewport**
 
 Xác nhận không selector nào tạo `min-width` lớn hơn viewport; ID và log dùng
 `overflow-wrap:anywhere`; bảng mobile thành card; history/terminal/status grid
 đều hạ về một cột khi cần.
 
-- [ ] **Bước 4: Bổ sung checklist QA thủ công**
+- [x] **Bước 4: Bổ sung checklist QA thủ công**
 
 Trong `docs/operations/acceptance-checklist.md`, thêm checklist exact:
 
 ```markdown
 ### Admin Web terminal UI
 
-- [ ] 1280×720 dark/light: sidebar mở, thu gọn và reload vẫn giữ state.
-- [ ] 768 px: sidebar icon-only; không tràn ngang toàn trang.
-- [ ] 390×844: bottom navigation; table thành card; modal và toast không bị che.
-- [ ] Login sai/đúng, session hết hạn và CSRF lỗi hiển thị thông báo tiếng Việt.
-- [ ] Overview loading/empty/error; Access stale/draft/409; History filter/page/export/delete.
-- [ ] System QR/log/activity/restart; không tự retry mutation.
-- [ ] Tab/Shift+Tab, Enter, Space, Escape và focus ring hoạt động.
-- [ ] `prefers-reduced-motion` tắt skeleton/transition không cần thiết.
+- [x] 1280×720 dark/light: sidebar mở, thu gọn và reload vẫn giữ state.
+- [x] 768 px: sidebar icon-only; không tràn ngang toàn trang.
+- [x] 390×844: bottom navigation; table thành card; modal và toast không bị che.
+- [x] Login sai/đúng, session hết hạn và CSRF lỗi hiển thị thông báo tiếng Việt.
+- [x] Overview loading/empty/error; Access stale/draft/409; History filter/page/export/delete.
+- [x] System QR/log/activity/restart; không tự retry mutation.
+- [x] Tab/Shift+Tab, Enter, Space, Escape và focus ring hoạt động.
+- [x] `prefers-reduced-motion` tắt skeleton/transition không cần thiết.
 ```
 
-- [ ] **Bước 5: Chạy targeted accessibility test**
+- [x] **Bước 5: Chạy targeted accessibility test**
 
 Run: `python -m pytest -q tests/python/test_tooling.py -k accessibility`
 
 Expected: PASS.
 
-- [ ] **Bước 6: Browser QA bằng fake runtime hiện có**
+- [x] **Bước 6: Browser QA bằng fake runtime hiện có**
 
 Khởi động Admin Web bằng fixture/fake bridge không chứa dữ liệu thật, mở bằng
 browser tại 1280×720, 768×900 và 390×844. Kiểm tra đúng checklist Bước 4; lưu
 kết quả pass/fail vào checkpoint, không lưu screenshot có ID/runtime thật.
 
-- [ ] **Bước 7: Commit accessibility/QA**
+- [x] **Bước 7: Commit accessibility/QA**
 
 ```powershell
 git add hermes-plugin/admin_web tests/python/test_tooling.py docs/operations/acceptance-checklist.md
@@ -1175,7 +1180,7 @@ git commit -m "test: cover admin web responsive accessibility"
 - Modify: `docs/superpowers/plans/2026-08-10-hermes-zalo-admin-web-ui.md`
 - Test: `test/config.test.js`
 
-- [ ] **Bước 1: Viết packaging test RED cho đủ ba asset**
+- [x] **Bước 1: Viết packaging test RED cho đủ ba asset**
 
 Mở rộng test `npm dry-run artifact`:
 
@@ -1200,7 +1205,7 @@ Run: `node --test test/config.test.js`
 
 Expected: package test PASS nếu Task 1 đúng; nếu thiếu asset sẽ FAIL rõ path.
 
-- [ ] **Bước 2: Chạy pack và kiểm tra nội dung thực tế**
+- [x] **Bước 2: Chạy pack và kiểm tra nội dung thực tế**
 
 Run:
 
@@ -1211,7 +1216,7 @@ npm pack --dry-run --json
 Expected: metadata có đủ ba asset, không có `.env`, database, QR, media, log hoặc
 mockup brainstorm.
 
-- [ ] **Bước 3: Cập nhật README tiếng Việt và tiếng Anh**
+- [x] **Bước 3: Cập nhật README tiếng Việt và tiếng Anh**
 
 Thêm đoạn sau vào phần Admin Web của `README.vi.md`:
 
@@ -1235,7 +1240,7 @@ The redesign does not change APIs, the database, or permissions. Missing
 `admin_web` assets fail startup; reinstall the complete package.
 ```
 
-- [ ] **Bước 4: Cập nhật checkpoint kế hoạch Admin Web gốc**
+- [x] **Bước 4: Cập nhật checkpoint kế hoạch Admin Web gốc**
 
 Thêm vào đầu `Checkpoint phiên làm việc`, rồi thay các giá trị trong dấu `<...>`
 bằng output thật của Task 12 trước commit cuối:
@@ -1250,7 +1255,7 @@ bằng output thật của Task 12 trước commit cuối:
 Không commit khi còn dấu `<` hoặc `>` trong dòng checkpoint. Không ghi secret,
 cookie hoặc ID runtime.
 
-- [ ] **Bước 5: Chạy packaging/security targeted**
+- [x] **Bước 5: Chạy packaging/security targeted**
 
 Run:
 
@@ -1263,7 +1268,7 @@ git diff --check
 
 Expected: tất cả exit `0`, acceptance `ok: true`.
 
-- [ ] **Bước 6: Commit packaging/docs**
+- [x] **Bước 6: Commit packaging/docs**
 
 ```powershell
 git add test/config.test.js README.md README.vi.md docs/superpowers/plans/2026-08-10-hermes-zalo-admin-web-ui.md
@@ -1278,7 +1283,7 @@ git commit -m "docs: ship terminal admin web assets"
 - Modify: `docs/superpowers/plans/2026-08-10-hermes-zalo-admin-web-ui.md`
 - Verify only: toàn repository
 
-- [ ] **Bước 1: Xác nhận working tree và manifest**
+- [x] **Bước 1: Xác nhận working tree và manifest**
 
 Run:
 
@@ -1290,19 +1295,19 @@ python scripts/acceptance.py --static --json
 
 Expected: mọi path nằm trong `file-manifest.md`; static acceptance `ok: true`.
 
-- [ ] **Bước 2: Chạy toàn bộ Node suite**
+- [x] **Bước 2: Chạy toàn bộ Node suite**
 
 Run: `npm test`
 
 Expected: tất cả test PASS, test count lớn hơn baseline `66`.
 
-- [ ] **Bước 3: Chạy toàn bộ Python và integration suite**
+- [x] **Bước 3: Chạy toàn bộ Python và integration suite**
 
 Run: `python -m pytest -q`
 
 Expected: tất cả test PASS, không skip test mới.
 
-- [ ] **Bước 4: Chạy full acceptance và dependency audit**
+- [x] **Bước 4: Chạy full acceptance và dependency audit**
 
 Run:
 
@@ -1314,7 +1319,7 @@ python -m pip check
 
 Expected: acceptance `ok: true`, `0 vulnerabilities`, không broken dependency.
 
-- [ ] **Bước 5: Kiểm tra migration và whitespace**
+- [x] **Bước 5: Kiểm tra migration và whitespace**
 
 Run:
 
@@ -1331,7 +1336,7 @@ Expected checksum:
 
 Expected `git diff --check`: exit `0`.
 
-- [ ] **Bước 6: Cập nhật checkpoint bằng bằng chứng thật**
+- [x] **Bước 6: Cập nhật checkpoint bằng bằng chứng thật**
 
 Ghi vào checkpoint kế hoạch Admin Web gốc:
 
@@ -1342,7 +1347,7 @@ Ghi vào checkpoint kế hoạch Admin Web gốc:
 - Việc tiếp theo: review diff, chọn phát hành patch mới; không tự tag/push nếu
   người dùng chưa yêu cầu.
 
-- [ ] **Bước 7: Commit checkpoint cuối**
+- [x] **Bước 7: Commit checkpoint cuối**
 
 ```powershell
 git add docs/superpowers/plans/2026-08-10-hermes-zalo-admin-web-ui.md
