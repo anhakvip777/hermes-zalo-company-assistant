@@ -14,6 +14,7 @@
 | `docs/operations/acceptance-checklist.md` | Checklist nghiệm thu |
 | `docs/superpowers/specs/2026-08-10-hermes-zalo-admin-web-ui-design.md` | Thiết kế Admin Web UI nhúng trong Hermes Zalo plugin |
 | `docs/superpowers/specs/2026-08-13-hermes-zalo-admin-web-terminal-redesign-design.md` | Thiết kế làm mới Admin Web theo phong cách terminal, giữ nguyên API và database |
+| `docs/superpowers/specs/2026-08-13-hermes-zalo-follow-up-tracking-design.md` | Thiết kế theo dõi phản hồi DM nhiều ngày, nhắc một lần và báo cáo admin |
 | `docs/superpowers/plans/2026-08-10-hermes-zalo-admin-web-ui.md` | Kế hoạch triển khai Admin Web UI theo TDD |
 | `docs/superpowers/plans/2026-08-13-hermes-zalo-admin-web-terminal-redesign.md` | Kế hoạch TDD làm mới Admin Web theo spec terminal đã duyệt |
 | `docs/superpowers/specs/2026-08-09-hermes-zalo-company-assistant-design.md` | Spec trợ lý công ty Hermes trên Zalo |
