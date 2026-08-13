@@ -67,8 +67,17 @@ const tag = run("git", ["tag", "--points-at", "HEAD"]);
 const tags = tag ? tag.split(/\r?\n/) : [];
 const expectedTag = `v${version}`;
 if (ciRelease) {
+  let attestedCommit = "";
+  let tagCommit = "";
+  try {
+    attestedCommit = run("git", ["rev-parse", `${process.env.GITHUB_SHA}^{commit}`]);
+    tagCommit = run("git", ["rev-list", "-n", "1", process.env.GITHUB_REF_NAME || ""]);
+  } catch {
+    // The shared attestation failure below is intentionally secret-safe.
+  }
   const attested = process.env.GITHUB_REF_NAME === expectedTag
-    && process.env.GITHUB_SHA === commit
+    && attestedCommit === commit
+    && tagCommit === commit
     && Boolean(process.env.GITHUB_REPOSITORY)
     && Boolean(process.env.GITHUB_RUN_ID);
   if (!attested) {
@@ -122,7 +131,7 @@ try {
       os: `${os.platform()} ${os.release()} ${os.arch()}`,
     },
     verification: {
-      expected_node_tests: 65,
+      expected_node_tests: 66,
       expected_python_tests_including_integration: 202,
       expected_integration_subset: 17,
       ci_evidence: !ciRelease && (allowDirty || status)

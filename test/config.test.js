@@ -109,6 +109,8 @@ test("CI release mode requires an attested matching tag and commit", () => {
   assert.match(source, /--ci-release/);
   assert.match(source, /GITHUB_REF_NAME/);
   assert.match(source, /GITHUB_SHA/);
+  assert.match(source, /\^\{commit\}/);
+  assert.match(source, /rev-list/);
   assert.match(source, /GITHUB_RUN_ID/);
   assert.match(source, /CI release attestation/i);
 });
