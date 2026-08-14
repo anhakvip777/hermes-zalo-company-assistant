@@ -56,6 +56,25 @@ các quyền liên phạm vi đó chỉ dành cho admin.
 
 Mỗi câu trả lời hoặc media outbound được ghi vào store sau khi bridge trả về provider ID. Timeout/không rõ kết quả trả trạng thái `unknown` và không tự gửi lại.
 
+### Theo dõi phản hồi nhiều ngày
+
+`FollowUpService` dùng hai bảng trong migration `002_follow_up_tracking.sql` để
+lưu yêu cầu của admin và từng target DM. Khi tạo yêu cầu, toàn bộ target được
+ghi ở trạng thái `initial_sending` trước khi adapter gửi câu hỏi. Chỉ DM của
+đúng `target_id`, cùng thread DM và có `sent_at` sau `initial_sent_at` mới được
+ghép; message group vẫn được lưu nhưng không bao giờ hoàn thành target DM.
+
+Adapter chạy một ticker `asyncio` nội bộ cùng process Python hiện có. Ticker chỉ
+claim và gửi khi bridge/Zalo đã sẵn sàng; khi mất kết nối, deadline vẫn nằm trong
+SQLite và sẽ được đọc lại sau reconnect. Mỗi claim được ghi trước network call.
+Claim dở dang sau restart thành `unknown`, không tự gửi lại. Mỗi target quá hạn
+chỉ nhận một reminder tự động; sau khi mọi target có outcome, report chỉ gửi vào
+DM của admin tạo yêu cầu và follow-up chuyển sang `awaiting_admin`. Các admin
+khác vẫn có thể dùng `zalo_admin` để xem/gia hạn/nhắc thủ công/đóng.
+
+Workflow này không dùng Hermes cron, prompt, terminal, quét history hay file JSON
+làm state nghiệp vụ và không tạo process/service mới.
+
 ## Định danh và session
 
 - `allowed_users` là nguồn duy nhất cho quyền kích hoạt Hermes.

@@ -13,6 +13,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from company_config import CompanyConfig, CompanyConfigError, CompanyConfigFile
 from history_store import HistoryStore
+from follow_up import FollowUpService
 from request_context import Requester, bind_requester
 from tooling import ZaloTooling, register_tooling
 from admin import (
@@ -3155,6 +3156,64 @@ def test_register_tooling_registers_three_tools_and_guards(tmp_path: Path):
 def test_pre_tool_hook_does_not_block_non_zalo_turn_without_requester(tmp_path: Path):
     tooling = ZaloTooling(bridge=FakeBridge(), store=HistoryStore(tmp_path / "h.sqlite"), config=config())
     assert tooling.on_pre_tool_call(tool_name="read_file", args={"path": "README.md"}) is None
+
+
+@pytest.mark.asyncio
+async def test_follow_up_admin_boundary_and_allowlist_are_fail_closed(tmp_path: Path) -> None:
+    store = HistoryStore(tmp_path / "h.sqlite")
+    runtime_config = config()
+    sent: list[tuple[str, str]] = []
+
+    async def send_dm(target_id: str, text: str):
+        sent.append((target_id, text))
+        return {"success": True, "message_id": f"provider-{len(sent)}"}
+
+    follow_ups = FollowUpService(
+        store=store,
+        allowed_users=lambda: set(runtime_config.allowed_users),
+        send_dm=send_dm,
+    )
+    admin = AdminService(store=store, follow_up_service=follow_ups)
+    tooling = ZaloTooling(
+        bridge=FakeBridge(),
+        store=store,
+        config=runtime_config,
+        admin=admin,
+    )
+    payload = {
+        "action": "follow_up_create",
+        "title": "Họp",
+        "question": "Có họp không?",
+        "targets": [{"zalo_id": "u-1", "name": "Lan"}],
+        "due_at": "2099-08-15T10:00:00Z",
+    }
+
+    with bind_requester(requester("u-1", admin=False)):
+        denied = json.loads(await tooling.zalo_admin(payload))
+    assert "error" in denied
+    assert sent == []
+
+    with bind_requester(requester("admin", admin=True)):
+        rejected = json.loads(
+            await tooling.zalo_admin(
+                {**payload, "targets": [{"zalo_id": "outside"}]}
+            )
+        )
+    assert "allowlist" in rejected["error"]
+    assert sent == []
+
+    with bind_requester(requester("admin", admin=True)):
+        created = json.loads(await tooling.zalo_admin(payload))
+    assert created["success"] is True
+    assert sent == [("u-1", "Có họp không?")]
+
+    with bind_requester(requester("admin", admin=True)):
+        status = json.loads(
+            await tooling.zalo_admin(
+                {"action": "follow_up_status", "follow_up_id": created["follow_up_id"]}
+            )
+        )
+    assert status["targets"][0]["target_id"] == "u-1"
 
 
 def test_pre_tool_hook_logs_blocked_memory_mutation(tmp_path: Path):

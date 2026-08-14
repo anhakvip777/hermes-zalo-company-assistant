@@ -1,7 +1,7 @@
 # Thiết kế theo dõi phản hồi Zalo nhiều ngày
 
 **Ngày:** 2026-08-13  
-**Trạng thái:** Đã chốt chính sách, chờ duyệt spec để lập kế hoạch triển khai  
+**Trạng thái:** Đã duyệt triển khai; kế hoạch TDD: `docs/superpowers/plans/2026-08-13-hermes-zalo-follow-up-tracking.md`
 **Phạm vi:** Hermes Zalo Company Assistant
 
 ## 1. Vấn đề thực tế

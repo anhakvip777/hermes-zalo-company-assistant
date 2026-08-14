@@ -316,6 +316,7 @@ class AdminService:
         runtime_config_provider: Callable[[], Any] | None = None,
         runtime_config_applier: Callable[[CompanyConfig], Any] | None = None,
         export_root: str | Path | None = None,
+        follow_up_service: Any | None = None,
     ) -> None:
         self.config_file = config_file
         self.store = store
@@ -327,6 +328,7 @@ class AdminService:
         self.runtime_config_provider = runtime_config_provider
         self.runtime_config_applier = runtime_config_applier
         self.export_root = Path(export_root) if export_root else None
+        self.follow_up_service = follow_up_service
         self._config_lock = asyncio.Lock()
 
     def require(self, requester: Requester) -> None:
@@ -637,6 +639,42 @@ class AdminService:
             if self.log_provider is not None:
                 return await _maybe_call(self.log_provider, lines)
             return self.show_logs(lines, requester=requester)
+        if action.startswith("follow_up_"):
+            if self.follow_up_service is None:
+                raise CompanyConfigError("follow-up service is not configured")
+            if action == "follow_up_create":
+                return await self.follow_up_service.create(
+                    owner_id=requester.requester_id,
+                    title=str(args.get("title") or ""),
+                    question=str(args.get("question") or ""),
+                    targets=args.get("targets") or [],
+                    due_at=str(args.get("due_at") or ""),
+                )
+            if action == "follow_up_status":
+                return await self.follow_up_service.status(
+                    follow_up_id=(
+                        int(args["follow_up_id"])
+                        if args.get("follow_up_id") is not None
+                        else None
+                    )
+                )
+            if action == "follow_up_extend":
+                return await self.follow_up_service.extend(
+                    actor_id=requester.requester_id,
+                    follow_up_id=int(args.get("follow_up_id")),
+                    due_at=str(args.get("due_at") or ""),
+                )
+            if action == "follow_up_remind":
+                return await self.follow_up_service.remind(
+                    actor_id=requester.requester_id,
+                    follow_up_id=int(args.get("follow_up_id")),
+                    target_ids=args.get("target_ids"),
+                )
+            if action == "follow_up_close":
+                return self.follow_up_service.close(
+                    actor_id=requester.requester_id,
+                    follow_up_id=int(args.get("follow_up_id")),
+                )
         raise ValueError(f"unknown admin action: {action}")
 
     def show_logs(self, lines: int = 100, *, requester: Requester) -> dict[str, Any]:

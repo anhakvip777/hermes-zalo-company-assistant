@@ -534,6 +534,456 @@ class HistoryStore:
                 attachment_index=index,
             )
 
+    def create_follow_up(
+        self,
+        *,
+        owner_id: str,
+        title: str,
+        question_text: str,
+        due_at: str,
+        targets: Sequence[Mapping[str, Any]],
+        created_at: str | None = None,
+    ) -> int:
+        normalized_owner = str(owner_id or "").strip()
+        normalized_title = str(title or "").strip()
+        normalized_question = str(question_text or "").strip()
+        normalized_due_at = str(due_at or "").strip()
+        if not all((normalized_owner, normalized_title, normalized_question, normalized_due_at)):
+            raise ValueError("owner_id, title, question_text, and due_at are required")
+
+        normalized_targets: list[tuple[str, str | None]] = []
+        seen_targets: set[str] = set()
+        for target in targets:
+            if not isinstance(target, Mapping):
+                raise ValueError("each follow-up target must be an object")
+            target_id = str(target.get("target_id") or "").strip()
+            if not target_id:
+                raise ValueError("target_id is required")
+            if target_id in seen_targets:
+                raise ValueError("target_id must be unique within a follow-up")
+            seen_targets.add(target_id)
+            target_name = str(target.get("target_name") or "").strip() or None
+            normalized_targets.append((target_id, target_name))
+        if not normalized_targets:
+            raise ValueError("at least one follow-up target is required")
+
+        timestamp = str(created_at or utc_now())
+        with self._lock, self.connection:
+            cursor = self.connection.execute(
+                "INSERT INTO follow_ups("
+                "owner_id, title, question_text, created_at, due_at, state, "
+                "report_state"
+                ") VALUES(?, ?, ?, ?, ?, 'active', 'pending')",
+                (
+                    normalized_owner,
+                    normalized_title,
+                    normalized_question,
+                    timestamp,
+                    normalized_due_at,
+                ),
+            )
+            follow_up_id = int(cursor.lastrowid)
+            self.connection.executemany(
+                "INSERT INTO follow_up_targets("
+                "follow_up_id, target_id, target_name, state"
+                ") VALUES(?, ?, ?, 'initial_sending')",
+                [
+                    (follow_up_id, target_id, target_name)
+                    for target_id, target_name in normalized_targets
+                ],
+            )
+        return follow_up_id
+
+    def follow_up_targets(self, follow_up_id: int) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT * FROM follow_up_targets WHERE follow_up_id=? ORDER BY id",
+                (int(follow_up_id),),
+            ).fetchall()
+        return [self._row(row) for row in rows]
+
+    def claim_initial_target(
+        self,
+        follow_up_id: int,
+        target_id: str,
+        *,
+        claimed_at: str | None = None,
+    ) -> dict[str, Any] | None:
+        timestamp = str(claimed_at or utc_now())
+        with self._lock, self.connection:
+            cursor = self.connection.execute(
+                "UPDATE follow_up_targets SET initial_claimed_at=? "
+                "WHERE follow_up_id=? AND target_id=? "
+                "AND state='initial_sending' AND initial_claimed_at IS NULL",
+                (timestamp, int(follow_up_id), str(target_id)),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = self.connection.execute(
+                "SELECT * FROM follow_up_targets WHERE follow_up_id=? AND target_id=?",
+                (int(follow_up_id), str(target_id)),
+            ).fetchone()
+            assert row is not None
+            return self._row(row)
+
+    def complete_initial_target(
+        self,
+        follow_up_id: int,
+        target_id: str,
+        *,
+        state: str,
+        provider_message_id: str | None = None,
+        sent_at: str | None = None,
+    ) -> dict[str, Any] | None:
+        normalized_state = str(state or "").lower()
+        if normalized_state not in {
+            "awaiting_response",
+            "initial_failed",
+            "initial_unknown",
+        }:
+            raise ValueError("invalid initial follow-up outcome")
+        sent_timestamp = (
+            str(sent_at or utc_now())
+            if normalized_state == "awaiting_response"
+            else None
+        )
+        provider_id = (
+            str(provider_message_id or "") or None
+            if normalized_state == "awaiting_response"
+            else None
+        )
+        with self._lock, self.connection:
+            cursor = self.connection.execute(
+                "UPDATE follow_up_targets SET state=?, "
+                "initial_provider_message_id=?, initial_sent_at=? "
+                "WHERE follow_up_id=? AND target_id=? "
+                "AND state='initial_sending' AND initial_claimed_at IS NOT NULL",
+                (
+                    normalized_state,
+                    provider_id,
+                    sent_timestamp,
+                    int(follow_up_id),
+                    str(target_id),
+                ),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = self.connection.execute(
+                "SELECT * FROM follow_up_targets WHERE follow_up_id=? AND target_id=?",
+                (int(follow_up_id), str(target_id)),
+            ).fetchone()
+            assert row is not None
+            return self._row(row)
+
+    def record_follow_up_response(
+        self,
+        *,
+        stored_message_id: int,
+        target_id: str,
+        sent_at: str,
+        response_kind: str,
+    ) -> list[dict[str, Any]]:
+        normalized_kind = str(response_kind or "").lower()
+        if normalized_kind not in {"yes", "no", "other"}:
+            raise ValueError("invalid follow-up response kind")
+        matched: list[dict[str, Any]] = []
+        with self._lock, self.connection:
+            rows = self.connection.execute(
+                "SELECT t.id, t.follow_up_id, t.target_id "
+                "FROM follow_up_targets t JOIN follow_ups f "
+                "ON f.id=t.follow_up_id AND f.state!='closed' "
+                "WHERE t.target_id=? "
+                "AND t.state IN ('awaiting_response', 'reminded', 'reminder_failed', 'reminder_unknown') "
+                "AND t.initial_sent_at IS NOT NULL "
+                "AND datetime(t.initial_sent_at)<datetime(?) "
+                "AND t.response_at IS NULL "
+                "ORDER BY t.id",
+                (str(target_id), str(sent_at)),
+            ).fetchall()
+            for row in rows:
+                cursor = self.connection.execute(
+                    "UPDATE follow_up_targets SET state='responded', "
+                    "response_message_id=?, response_at=?, response_kind=? "
+                    "WHERE id=? AND response_at IS NULL "
+                    "AND state IN ('awaiting_response', 'reminded', 'reminder_failed', 'reminder_unknown')",
+                    (
+                        int(stored_message_id),
+                        str(sent_at),
+                        normalized_kind,
+                        int(row["id"]),
+                    ),
+                )
+                if cursor.rowcount == 1:
+                    matched.append(
+                        {
+                            "follow_up_id": int(row["follow_up_id"]),
+                            "target_id": str(row["target_id"]),
+                            "response_kind": normalized_kind,
+                        }
+                    )
+        return matched
+
+    def list_follow_ups(self, follow_up_id: int | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            if follow_up_id is None:
+                rows = self.connection.execute(
+                    "SELECT * FROM follow_ups ORDER BY created_at DESC, id DESC"
+                ).fetchall()
+            else:
+                rows = self.connection.execute(
+                    "SELECT * FROM follow_ups WHERE id=?", (int(follow_up_id),)
+                ).fetchall()
+        return [self._row(row) for row in rows]
+
+    def extend_follow_up(
+        self,
+        *,
+        follow_up_id: int,
+        due_at: str,
+    ) -> dict[str, Any] | None:
+        with self._lock, self.connection:
+            cursor = self.connection.execute(
+                "UPDATE follow_ups SET due_at=?, state='active', "
+                "report_state='pending', report_claimed_at=NULL, report_sent_at=NULL "
+                "WHERE id=? AND state!='closed'",
+                (str(due_at), int(follow_up_id)),
+            )
+            if cursor.rowcount != 1:
+                return None
+            self.connection.execute(
+                "UPDATE follow_up_targets SET state='awaiting_response', "
+                "reminder_claimed_at=NULL, reminder_sent_at=NULL "
+                "WHERE follow_up_id=? AND response_at IS NULL "
+                "AND state IN ('reminded', 'reminder_failed', 'reminder_unknown')",
+                (int(follow_up_id),),
+            )
+            row = self.connection.execute(
+                "SELECT * FROM follow_ups WHERE id=?", (int(follow_up_id),)
+            ).fetchone()
+            assert row is not None
+            return self._row(row)
+
+    def claim_manual_reminder_targets(
+        self,
+        *,
+        follow_up_id: int,
+        target_ids: Sequence[str] | None = None,
+        claimed_at: str | None = None,
+    ) -> list[dict[str, Any]]:
+        timestamp = str(claimed_at or utc_now())
+        normalized_ids = [str(value) for value in (target_ids or []) if str(value)]
+        claimed: list[dict[str, Any]] = []
+        with self._lock, self.connection:
+            clauses = [
+                "t.follow_up_id=?",
+                "t.response_at IS NULL",
+                "t.state IN ('awaiting_response', 'reminded', 'reminder_failed', 'reminder_unknown')",
+            ]
+            params: list[Any] = [int(follow_up_id)]
+            if normalized_ids:
+                placeholders = ",".join("?" for _ in normalized_ids)
+                clauses.append(f"t.target_id IN ({placeholders})")
+                params.extend(normalized_ids)
+            rows = self.connection.execute(
+                "SELECT t.*, f.title FROM follow_up_targets t JOIN follow_ups f "
+                "ON f.id=t.follow_up_id AND f.state!='closed' WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY t.id",
+                params,
+            ).fetchall()
+            for row in rows:
+                cursor = self.connection.execute(
+                    "UPDATE follow_up_targets SET state='reminder_sending', "
+                    "reminder_claimed_at=? WHERE id=? AND response_at IS NULL "
+                    "AND state IN ('awaiting_response', 'reminded', 'reminder_failed', 'reminder_unknown')",
+                    (timestamp, int(row["id"])),
+                )
+                if cursor.rowcount != 1:
+                    continue
+                item = self._row(row)
+                item["state"] = "reminder_sending"
+                item["reminder_claimed_at"] = timestamp
+                claimed.append(item)
+        return claimed
+
+    def close_follow_up(
+        self,
+        *,
+        follow_up_id: int,
+        closed_at: str | None = None,
+    ) -> dict[str, Any] | None:
+        timestamp = str(closed_at or utc_now())
+        with self._lock, self.connection:
+            cursor = self.connection.execute(
+                "UPDATE follow_ups SET state='closed', closed_at=? "
+                "WHERE id=? AND state!='closed'",
+                (timestamp, int(follow_up_id)),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = self.connection.execute(
+                "SELECT * FROM follow_ups WHERE id=?", (int(follow_up_id),)
+            ).fetchone()
+            assert row is not None
+            return self._row(row)
+
+    def claim_due_reminder_targets(self, *, now: str) -> list[dict[str, Any]]:
+        timestamp = str(now or "").strip()
+        if not timestamp:
+            raise ValueError("now is required")
+        claimed: list[dict[str, Any]] = []
+        with self._lock, self.connection:
+            rows = self.connection.execute(
+                "SELECT t.*, f.owner_id, f.title, f.question_text, f.due_at "
+                "FROM follow_up_targets t JOIN follow_ups f ON f.id=t.follow_up_id "
+                "WHERE f.state='active' AND datetime(f.due_at)<=datetime(?) "
+                "AND t.state='awaiting_response' ORDER BY f.due_at, t.id",
+                (timestamp,),
+            ).fetchall()
+            for row in rows:
+                cursor = self.connection.execute(
+                    "UPDATE follow_up_targets SET state='reminder_sending', "
+                    "reminder_claimed_at=? WHERE id=? "
+                    "AND state='awaiting_response' AND EXISTS ("
+                    "SELECT 1 FROM follow_ups f WHERE f.id=follow_up_id "
+                    "AND f.state='active' AND datetime(f.due_at)<=datetime(?)"
+                    ")",
+                    (timestamp, int(row["id"]), timestamp),
+                )
+                if cursor.rowcount != 1:
+                    continue
+                claimed_row = self._row(row)
+                claimed_row["state"] = "reminder_sending"
+                claimed_row["reminder_claimed_at"] = timestamp
+                claimed.append(claimed_row)
+        return claimed
+
+    def complete_reminder_target(
+        self,
+        target_row_id: int,
+        *,
+        state: str,
+        provider_message_id: str | None = None,
+        sent_at: str | None = None,
+    ) -> dict[str, Any] | None:
+        normalized_state = str(state or "").lower()
+        if normalized_state not in {
+            "reminded",
+            "reminder_failed",
+            "reminder_unknown",
+        }:
+            raise ValueError("invalid reminder follow-up outcome")
+        sent_timestamp = (
+            str(sent_at or utc_now())
+            if normalized_state == "reminded"
+            else None
+        )
+        provider_id = (
+            str(provider_message_id or "") or None
+            if normalized_state == "reminded"
+            else None
+        )
+        with self._lock, self.connection:
+            cursor = self.connection.execute(
+                "UPDATE follow_up_targets SET state=?, "
+                "reminder_provider_message_id=?, reminder_sent_at=? "
+                "WHERE id=? AND state='reminder_sending' "
+                "AND reminder_claimed_at IS NOT NULL",
+                (normalized_state, provider_id, sent_timestamp, int(target_row_id)),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = self.connection.execute(
+                "SELECT * FROM follow_up_targets WHERE id=?",
+                (int(target_row_id),),
+            ).fetchone()
+            assert row is not None
+            return self._row(row)
+
+    def claim_due_reports(self, *, now: str) -> list[dict[str, Any]]:
+        timestamp = str(now or "").strip()
+        if not timestamp:
+            raise ValueError("now is required")
+        claimed: list[dict[str, Any]] = []
+        waiting_states = "'initial_sending', 'awaiting_response', 'reminder_sending'"
+        with self._lock, self.connection:
+            rows = self.connection.execute(
+                "SELECT f.* FROM follow_ups f WHERE f.state='active' "
+                "AND f.report_state='pending' AND datetime(f.due_at)<=datetime(?) "
+                "AND NOT EXISTS (SELECT 1 FROM follow_up_targets t "
+                "WHERE t.follow_up_id=f.id AND t.state IN ("
+                + waiting_states
+                + ")) ORDER BY f.due_at, f.id",
+                (timestamp,),
+            ).fetchall()
+            for row in rows:
+                cursor = self.connection.execute(
+                    "UPDATE follow_ups SET report_state='sending', "
+                    "report_claimed_at=? WHERE id=? AND state='active' "
+                    "AND report_state='pending' AND datetime(due_at)<=datetime(?) "
+                    "AND NOT EXISTS (SELECT 1 FROM follow_up_targets t "
+                    "WHERE t.follow_up_id=follow_ups.id AND t.state IN ("
+                    + waiting_states
+                    + "))",
+                    (timestamp, int(row["id"]), timestamp),
+                )
+                if cursor.rowcount != 1:
+                    continue
+                claimed_row = self._row(row)
+                claimed_row["report_state"] = "sending"
+                claimed_row["report_claimed_at"] = timestamp
+                claimed.append(claimed_row)
+        return claimed
+
+    def complete_follow_up_report(
+        self,
+        follow_up_id: int,
+        *,
+        report_state: str,
+        sent_at: str | None = None,
+    ) -> dict[str, Any] | None:
+        normalized_state = str(report_state or "").lower()
+        if normalized_state not in {"sent", "unknown"}:
+            raise ValueError("invalid follow-up report outcome")
+        sent_timestamp = (
+            str(sent_at or utc_now()) if normalized_state == "sent" else None
+        )
+        with self._lock, self.connection:
+            cursor = self.connection.execute(
+                "UPDATE follow_ups SET state='awaiting_admin', report_state=?, "
+                "report_sent_at=? WHERE id=? AND state='active' "
+                "AND report_state='sending' AND report_claimed_at IS NOT NULL",
+                (normalized_state, sent_timestamp, int(follow_up_id)),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = self.connection.execute(
+                "SELECT * FROM follow_ups WHERE id=?", (int(follow_up_id),)
+            ).fetchone()
+            assert row is not None
+            return self._row(row)
+
+    def recover_follow_up_claims(self) -> dict[str, int]:
+        with self._lock, self.connection:
+            initial_unknown = self.connection.execute(
+                "UPDATE follow_up_targets SET state='initial_unknown' "
+                "WHERE state='initial_sending'"
+            ).rowcount
+            reminder_unknown = self.connection.execute(
+                "UPDATE follow_up_targets SET state='reminder_unknown' "
+                "WHERE state='reminder_sending' AND reminder_claimed_at IS NOT NULL"
+            ).rowcount
+            report_unknown = self.connection.execute(
+                "UPDATE follow_ups SET state='awaiting_admin', report_state='unknown' "
+                "WHERE state='active' AND report_state='sending' "
+                "AND report_claimed_at IS NOT NULL"
+            ).rowcount
+        return {
+            "initial_unknown": int(initial_unknown),
+            "reminder_unknown": int(reminder_unknown),
+            "report_unknown": int(report_unknown),
+        }
+
     @staticmethod
     def _row(row: sqlite3.Row) -> dict[str, Any]:
         result = dict(row)

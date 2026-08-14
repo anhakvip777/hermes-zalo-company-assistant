@@ -477,6 +477,61 @@ def _capture_dispatch(adapter: ZaloAdapter):
     return calls
 
 
+@pytest.mark.asyncio
+async def test_inbound_dm_matches_follow_up_after_store_before_hermes_dispatch(
+    tmp_path,
+) -> None:
+    adapter = _adapter(tmp_path)
+    order: list[str] = []
+
+    class SpyFollowUp:
+        def record_inbound_response(self, **_kwargs):
+            order.append("follow-up")
+            return []
+
+    adapter.follow_ups = SpyFollowUp()
+
+    async def capture(_event):
+        order.append("hermes")
+
+    adapter.handle_message = capture
+    await adapter._on_inbound_message(
+        _message(
+            message_id="dm-follow-up",
+            sender_id="member-1",
+            thread_id="member-1",
+            thread_type="user",
+            text="Có",
+        )
+    )
+
+    assert order == ["follow-up", "hermes"]
+    assert adapter.history_store.recent_messages("dm", "member-1")[0]["text"] == "Có"
+
+
+@pytest.mark.asyncio
+async def test_follow_up_ticker_is_singleton_and_disconnect_cancels_it(tmp_path) -> None:
+    adapter = _adapter(tmp_path)
+    tick_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def tick():
+        tick_started.set()
+        await release.wait()
+        return {"reminders": 0, "reports": 0}
+
+    adapter.follow_ups.tick = tick
+    adapter._bridge_available = True
+    adapter._zalo_logged_in = True
+    adapter._ensure_follow_up_task()
+    first = adapter._follow_up_task
+    adapter._ensure_follow_up_task()
+    assert adapter._follow_up_task is first
+    await asyncio.wait_for(tick_started.wait(), timeout=1)
+    await adapter.disconnect()
+    assert first is not None and first.done()
+
+
 @pytest.mark.parametrize(
     ("text", "expected"),
     [

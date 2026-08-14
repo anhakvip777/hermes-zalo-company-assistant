@@ -65,6 +65,7 @@ try:
     )
     from .company_config import CompanyConfig, CompanyConfigError, CompanyConfigFile
     from .history_store import HistoryStore, StoredMessage, redact_text
+    from .follow_up import FollowUpService
     from .media_policy import MediaPolicy
     from .request_context import Requester, bind_requester
     from .tooling import ZaloTooling, register_tooling
@@ -77,6 +78,7 @@ except ImportError:  # Hermes also loads platform adapters as top-level modules.
     )
     from company_config import CompanyConfig, CompanyConfigError, CompanyConfigFile
     from history_store import HistoryStore, StoredMessage, redact_text
+    from follow_up import FollowUpService
     from media_policy import MediaPolicy
     from request_context import Requester, bind_requester
     from tooling import ZaloTooling, register_tooling
@@ -442,6 +444,12 @@ class ZaloAdapter(BasePlatformAdapter):
             raise TypeError("history_store must be a HistoryStore")
         self.history_store = history_store
 
+        self.follow_ups = FollowUpService(
+            store=self.history_store,
+            allowed_users=lambda: set(self._allowed_users),
+            send_dm=self._send_follow_up_dm,
+        )
+
         media_policy = kwargs.pop("media_policy", None)
         if media_policy is None:
             media_policy = MediaPolicy(
@@ -474,6 +482,7 @@ class ZaloAdapter(BasePlatformAdapter):
             runtime_config_provider=lambda: self.company_config,
             runtime_config_applier=self._apply_company_config,
             export_root=export_root,
+            follow_up_service=self.follow_ups,
         )
         if self.admin_service.runtime_config_provider is None:
             self.admin_service.runtime_config_provider = lambda: self.company_config
@@ -481,6 +490,8 @@ class ZaloAdapter(BasePlatformAdapter):
             self.admin_service.runtime_config_applier = self._apply_company_config
         if self.admin_service.export_root is None:
             self.admin_service.export_root = export_root
+        if getattr(self.admin_service, "follow_up_service", None) is None:
+            self.admin_service.follow_up_service = self.follow_ups
         self.tooling = ZaloTooling(
             bridge=bridge,
             store=self.history_store,
@@ -521,6 +532,7 @@ class ZaloAdapter(BasePlatformAdapter):
 
         self._session = None  # aiohttp.ClientSession
         self._sse_task: Optional[asyncio.Task] = None
+        self._follow_up_task: Optional[asyncio.Task] = None
         self._stop = False
         self._last_event_id: Optional[str] = None
 
@@ -682,6 +694,24 @@ class ZaloAdapter(BasePlatformAdapter):
         if self._sse_task is None or self._sse_task.done():
             self._sse_task = asyncio.create_task(self._sse_loop())
 
+    def _ensure_follow_up_task(self) -> None:
+        if self._follow_up_task is None or self._follow_up_task.done():
+            self._follow_up_task = asyncio.create_task(self._follow_up_loop())
+
+    async def _follow_up_loop(self) -> None:
+        while not self._stop:
+            if self._bridge_available and self._zalo_logged_in:
+                try:
+                    await self.follow_ups.tick()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.error(
+                        "Zalo: follow-up ticker failed: %s",
+                        redact_text(str(exc)) or "unknown error",
+                    )
+            await asyncio.sleep(5)
+
     # ── Connection lifecycle ──────────────────────────────────────────────
 
     def _apply_history_retention(
@@ -798,6 +828,7 @@ class ZaloAdapter(BasePlatformAdapter):
 
         # Start the SSE inbound loop.
         self._ensure_sse_task()
+        self._ensure_follow_up_task()
         self._mark_connected()
         logger.info("Zalo: connected to bridge %s (ownId=%s)", self.bridge_url, self._own_id)
         return True
@@ -812,6 +843,13 @@ class ZaloAdapter(BasePlatformAdapter):
             except asyncio.CancelledError:
                 pass
         self._sse_task = None
+        if self._follow_up_task and not self._follow_up_task.done():
+            self._follow_up_task.cancel()
+            try:
+                await self._follow_up_task
+            except asyncio.CancelledError:
+                pass
+        self._follow_up_task = None
         await self._stop_admin_web()
         await self._close_session()
 
@@ -913,6 +951,7 @@ class ZaloAdapter(BasePlatformAdapter):
                 own_id = str(data.get("ownId") or "")
                 if own_id:
                     self._own_id = own_id
+                self._ensure_follow_up_task()
                 self._mark_connected()
             return
         if event_type == "session_dead":
@@ -1233,6 +1272,22 @@ class ZaloAdapter(BasePlatformAdapter):
 
         if not stored.inserted:
             return
+
+        if chat_type == "dm":
+            try:
+                self.follow_ups.record_inbound_response(
+                    stored_message_id=stored.message_id,
+                    sender_id=sender_id,
+                    thread_type="dm",
+                    thread_id=conversation_id,
+                    sent_at=sent_at,
+                    text=original_text,
+                )
+            except Exception as exc:
+                logger.error(
+                    "Zalo: failed to match follow-up response: %s",
+                    redact_text(str(exc)) or "unknown error",
+                )
 
         media_urls, media_types, message_type = await self._persist_attachments(
             stored=stored,
@@ -1653,6 +1708,13 @@ class ZaloAdapter(BasePlatformAdapter):
             success=True,
             message_id=last_message_id,
             raw_response=last,
+        )
+
+    async def _send_follow_up_dm(self, target_id: str, text: str) -> SendResult:
+        return await self.send(
+            str(target_id),
+            str(text),
+            metadata={"thread_type": "user"},
         )
 
     async def send_typing(self, chat_id: str, metadata=None) -> None:

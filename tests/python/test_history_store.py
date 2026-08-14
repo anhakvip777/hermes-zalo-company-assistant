@@ -16,6 +16,8 @@ EXPECTED_TABLES = {
     "message_events",
     "attachments",
     "tool_activity",
+    "follow_ups",
+    "follow_up_targets",
 }
 
 
@@ -278,6 +280,165 @@ def test_initial_migration_builds_locked_schema(tmp_path: Path) -> None:
     }
     assert tables == EXPECTED_TABLES
     assert store.connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+
+def test_follow_up_migration_creates_state_tables(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+
+    tables = {
+        row["name"]
+        for row in store.connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+    assert {"follow_ups", "follow_up_targets"} <= tables
+
+    foreign_keys = store.connection.execute(
+        "PRAGMA foreign_key_list(follow_up_targets)"
+    ).fetchall()
+    assert any(
+        row["table"] == "follow_ups" and row["on_delete"] == "CASCADE"
+        for row in foreign_keys
+    )
+    assert any(
+        row["table"] == "messages" and row["on_delete"] == "SET NULL"
+        for row in foreign_keys
+    )
+
+
+def test_follow_up_initial_claim_is_atomic_and_recovery_marks_unknown(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    follow_up_id = store.create_follow_up(
+        owner_id="admin",
+        title="Họp",
+        question_text="Có họp không?",
+        due_at="2026-08-15T10:00:00+00:00",
+        targets=[{"target_id": "u-1", "target_name": "Lan"}],
+    )
+
+    target = store.claim_initial_target(follow_up_id, "u-1")
+    assert target is not None
+    assert target["state"] == "initial_sending"
+    assert store.claim_initial_target(follow_up_id, "u-1") is None
+
+    assert store.recover_follow_up_claims() == {
+        "initial_unknown": 1,
+        "reminder_unknown": 0,
+        "report_unknown": 0,
+    }
+    assert store.follow_up_targets(follow_up_id)[0]["state"] == "initial_unknown"
+
+
+def test_follow_up_recovery_marks_unclaimed_initial_target_unknown(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    follow_up_id = store.create_follow_up(
+        owner_id="admin",
+        title="Họp",
+        question_text="Có họp không?",
+        due_at="2026-08-15T10:00:00+00:00",
+        targets=[{"target_id": "u-1"}],
+    )
+
+    assert store.recover_follow_up_claims()["initial_unknown"] == 1
+    assert store.follow_up_targets(follow_up_id)[0]["state"] == "initial_unknown"
+
+
+def test_follow_up_completion_claims_due_reminder_and_report_once(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    follow_up_id = store.create_follow_up(
+        owner_id="admin",
+        title="Họp",
+        question_text="Có họp không?",
+        due_at="2026-08-15T10:00:00+00:00",
+        targets=[{"target_id": "u-1", "target_name": "Lan"}],
+    )
+    assert store.claim_initial_target(follow_up_id, "u-1") is not None
+    initial = store.complete_initial_target(
+        follow_up_id,
+        "u-1",
+        state="awaiting_response",
+        provider_message_id="initial-1",
+        sent_at="2026-08-14T10:00:00+00:00",
+    )
+    assert initial is not None
+    assert initial["state"] == "awaiting_response"
+
+    claimed_targets = store.claim_due_reminder_targets(
+        now="2026-08-15T10:00:00+00:00"
+    )
+    assert len(claimed_targets) == 1
+    assert claimed_targets[0]["state"] == "reminder_sending"
+    assert store.claim_due_reminder_targets(
+        now="2026-08-15T10:00:00+00:00"
+    ) == []
+
+    reminder = store.complete_reminder_target(
+        claimed_targets[0]["id"],
+        state="reminded",
+        provider_message_id="reminder-1",
+        sent_at="2026-08-15T10:00:01+00:00",
+    )
+    assert reminder is not None
+    assert reminder["state"] == "reminded"
+
+    reports = store.claim_due_reports(now="2026-08-15T10:00:02+00:00")
+    assert len(reports) == 1
+    assert reports[0]["report_state"] == "sending"
+    assert store.claim_due_reports(now="2026-08-15T10:00:02+00:00") == []
+
+    report = store.complete_follow_up_report(
+        follow_up_id,
+        report_state="sent",
+        sent_at="2026-08-15T10:00:03+00:00",
+    )
+    assert report is not None
+    assert report["state"] == "awaiting_admin"
+    assert report["report_state"] == "sent"
+
+
+def test_purging_response_message_keeps_follow_up_outcome(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    follow_up_id = store.create_follow_up(
+        owner_id="admin",
+        title="Họp",
+        question_text="Có họp không?",
+        due_at="2026-08-15T10:00:00+00:00",
+        targets=[{"target_id": "u-1"}],
+    )
+    assert store.claim_initial_target(follow_up_id, "u-1") is not None
+    assert store.complete_initial_target(
+        follow_up_id,
+        "u-1",
+        state="awaiting_response",
+        provider_message_id="initial-1",
+        sent_at="2026-08-14T09:00:00Z",
+    ) is not None
+    response = store.store_message(
+        thread_type="dm",
+        thread_id="u-1",
+        sender_id="u-1",
+        text="Có",
+        provider_message_id="response-1",
+        sent_at="2026-08-14T11:00:00Z",
+    )
+    assert store.record_follow_up_response(
+        stored_message_id=response.message_id,
+        target_id="u-1",
+        sent_at="2026-08-14T11:00:00Z",
+        response_kind="yes",
+    ) == [{"follow_up_id": follow_up_id, "target_id": "u-1", "response_kind": "yes"}]
+
+    store.delete_history(thread_type="dm", thread_id="u-1")
+    row = store.follow_up_targets(follow_up_id)[0]
+    assert row["state"] == "responded"
+    assert row["response_message_id"] is None
+    assert row["response_kind"] == "yes"
 
 
 def test_applied_migration_checksum_drift_fails(tmp_path: Path) -> None:

@@ -15,6 +15,7 @@
 | `docs/superpowers/specs/2026-08-10-hermes-zalo-admin-web-ui-design.md` | Thiết kế Admin Web UI nhúng trong Hermes Zalo plugin |
 | `docs/superpowers/specs/2026-08-13-hermes-zalo-admin-web-terminal-redesign-design.md` | Thiết kế làm mới Admin Web theo phong cách terminal, giữ nguyên API và database |
 | `docs/superpowers/specs/2026-08-13-hermes-zalo-follow-up-tracking-design.md` | Thiết kế theo dõi phản hồi DM nhiều ngày, nhắc một lần và báo cáo admin |
+| `docs/superpowers/plans/2026-08-13-hermes-zalo-follow-up-tracking.md` | Kế hoạch TDD triển khai theo dõi phản hồi DM, reminder một lần và báo cáo owner |
 | `docs/superpowers/plans/2026-08-10-hermes-zalo-admin-web-ui.md` | Kế hoạch triển khai Admin Web UI theo TDD |
 | `docs/superpowers/plans/2026-08-13-hermes-zalo-admin-web-terminal-redesign.md` | Kế hoạch TDD làm mới Admin Web theo spec terminal đã duyệt |
 | `docs/superpowers/specs/2026-08-09-hermes-zalo-company-assistant-design.md` | Spec trợ lý công ty Hermes trên Zalo |
@@ -32,6 +33,9 @@
 | `hermes-plugin/tooling.py` | Tool handlers `zalo`, `zalo_history`, `zalo_admin` |
 | `hermes-plugin/admin.py` | Admin actions và service control |
 | `hermes-plugin/migrations/001_initial.sql` | Schema migration đầu tiên |
+| `hermes-plugin/migrations/002_follow_up_tracking.sql` | Schema state bền vững cho follow-up, reminder và report |
+| `hermes-plugin/follow_up.py` | State machine và ghép phản hồi DM cho follow-up |
+| `tests/python/test_follow_up.py` | Follow-up state machine, response matching và delivery outcome |
 | `test/helpers/fake-zalo-client.js` | Fake client cho Node contract tests |
 | `test/config.test.js` | Config/token/loopback tests |
 | `test/auth.test.js` | Auth trên mọi route |

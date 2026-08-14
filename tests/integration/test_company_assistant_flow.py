@@ -6,6 +6,7 @@ import os
 import runpy
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -453,6 +454,82 @@ async def test_real_adapter_stores_group_before_gate_and_dispatches_only_allowed
         assert len(dispatches) == 2
         assert dispatches[1][1].requester_id == "admin"
         assert dispatches[1][1].is_admin is True
+    finally:
+        adapter_module._ACTIVE_ADAPTER = previous_active_adapter
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_follow_up_group_message_is_not_response_and_report_targets_owner(
+    tmp_path: Path,
+) -> None:
+    previous_active_adapter = adapter_module._ACTIVE_ADAPTER
+    store = HistoryStore(tmp_path / "history.sqlite3", account_id="company")
+    try:
+        adapter = ZaloAdapter(
+            SimpleNamespace(extra={}),
+            company_config=company_config(),
+            history_store=store,
+            media_policy=MediaPolicy(tmp_path / "history"),
+        )
+        adapter._own_id = "bot-id"
+        adapter._own_name = "Trợ lý công ty"
+        adapter._message_handler = object()
+        sent: list[tuple[str, str]] = []
+
+        async def fake_send(chat_id: str, content: str, *args, **kwargs):
+            sent.append((str(chat_id), str(content)))
+            return SimpleNamespace(
+                success=True,
+                message_id=f"out-{len(sent)}",
+                raw_response={"success": True},
+            )
+
+        adapter.send = fake_send
+        adapter.handle_message = lambda _event: asyncio.sleep(0)
+        adapter.follow_ups.now = lambda: datetime(2026, 8, 14, 9, tzinfo=timezone.utc)
+        with bind_requester(
+            Requester(
+                requester_id="admin",
+                thread_type="dm",
+                thread_id="admin",
+                is_admin=True,
+                session_key="zalo:dm:admin",
+            )
+        ):
+            created = json.loads(
+                await adapter.tooling.zalo_admin(
+                    {
+                        "action": "follow_up_create",
+                        "title": "Họp",
+                        "question": "Có họp không?",
+                        "targets": [{"zalo_id": "u-1", "name": "Lan"}],
+                        "due_at": "2026-08-15T10:00:00Z",
+                    }
+                )
+            )
+        adapter.follow_ups.now = lambda: datetime(2026, 8, 15, 10, tzinfo=timezone.utc)
+
+        await adapter._on_inbound_message(
+            {
+                "messageId": "group-reply",
+                "cliMsgId": "cli-group-reply",
+                "threadId": "g-1",
+                "threadType": "group",
+                "threadName": "Group AI",
+                "senderId": "u-1",
+                "senderName": "Lan",
+                "text": "Có",
+                "mentions": [],
+                "ts": "2026-08-15T11:00:00Z",
+            }
+        )
+        await adapter.follow_ups.tick()
+
+        assert [recipient for recipient, _ in sent] == ["u-1", "u-1", "admin"]
+        target = store.follow_up_targets(created["follow_up_id"])[0]
+        assert target["response_kind"] is None
+        assert "Chưa phản hồi" in sent[-1][1]
     finally:
         adapter_module._ACTIVE_ADAPTER = previous_active_adapter
         store.close()

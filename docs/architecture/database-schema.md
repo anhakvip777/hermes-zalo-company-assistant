@@ -42,6 +42,31 @@ Indexes: `(conversation_id, sent_at DESC)`, `(sender_id, sent_at DESC)`, `(provi
 
 `id INTEGER PRIMARY KEY`, `occurred_at TEXT NOT NULL`, `requester_id TEXT NOT NULL`, `thread_type TEXT CHECK(thread_type IN ('dm','group','system'))`, `thread_id TEXT`, `tool_name TEXT NOT NULL`, `status TEXT CHECK(status IN ('success','failed','unknown','blocked')) NOT NULL`, `error_text TEXT`, `metadata_json TEXT NOT NULL DEFAULT '{}'`.
 
+### `follow_ups` (migration 002)
+
+Lưu yêu cầu theo dõi do admin tạo: `id`, `owner_id`, `title`, `question_text`,
+`created_at`, `due_at`, `state`, `report_state`, `report_claimed_at`,
+`report_sent_at`, `closed_at`. `state` chỉ nhận `active`, `awaiting_admin`,
+`closed`; `report_state` chỉ nhận `pending`, `sending`, `sent`, `unknown`.
+
+### `follow_up_targets` (migration 002)
+
+Lưu từng Zalo ID trong yêu cầu: `follow_up_id`, `target_id`, `target_name`,
+`state`, `initial_provider_message_id`, `initial_sent_at`,
+`response_message_id`, `response_at`, `response_kind`,
+`reminder_provider_message_id`, `reminder_claimed_at`, `reminder_sent_at`.
+`UNIQUE(follow_up_id, target_id)` ngăn target trùng; state có các outcome
+`initial_sending`, `awaiting_response`, `initial_failed`, `initial_unknown`,
+`reminder_sending`, `reminded`, `reminder_failed`, `reminder_unknown`,
+`responded`. `response_message_id` tham chiếu `messages.id` với
+`ON DELETE SET NULL`, vì vậy purge message không xóa follow-up hoặc outcome đã
+ghi. FK về `follow_ups` dùng `ON DELETE CASCADE` khi admin xóa toàn bộ yêu cầu.
+
+Các index của migration 002 phục vụ target đang chờ, target theo Zalo ID/thời
+điểm gửi và follow-up theo state/deadline. Claim reminder/report dùng transaction
+và điều kiện state; claim dở dang sau restart trở thành outcome `unknown`, không
+retry tự động.
+
 ## Migration runner
 
 `history_store.py` đọc các migration theo số thứ tự, tính SHA-256 trên bytes UTF-8 và so với `schema_migrations`. Nếu checksum của version đã áp dụng đổi, startup fail. Mỗi migration chạy trong transaction; chỉ insert vào `schema_migrations` sau khi script thành công.
@@ -49,3 +74,7 @@ Indexes: `(conversation_id, sent_at DESC)`, `(sender_id, sent_at DESC)`, `(provi
 ## Xóa/export
 
 Admin export tạo JSONL/manifest media theo conversation hoặc khoảng thời gian trong thư mục tạm dưới `HERMES_HOME/zalo-company/exports`. Admin delete xóa message/attachment theo filter và binary media liên quan trong cùng một thao tác best-effort; kết quả trả số dòng đã xóa.
+
+Retention/purge chỉ xóa message và media theo policy hiện hành. Follow-up còn mở
+không bị xóa theo message purge; nếu message phản hồi bị xóa, tham chiếu trở
+thành `NULL` nhưng `response_at`, `response_kind` và state vẫn giữ nguyên.

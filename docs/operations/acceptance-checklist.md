@@ -1,6 +1,6 @@
 # Checklist nghiệm thu
 
-Trạng thái bằng chứng UI terminal ngày 2026-08-13: Node `67/67`, toàn bộ Python `220/220`, Admin Web `81/81`; full acceptance `ok: true`, npm audit 0 vulnerability, pip check sạch và diff check pass.\n\nTrạng thái bằng chứng ngày 2026-08-11: Node `34/34`, toàn bộ Python `166/166`,
+Trạng thái bằng chứng UI terminal ngày 2026-08-13: Node `67/67`, toàn bộ Python `250/250` (bao gồm follow-up), Admin Web `81/81`; full acceptance `ok: true`, npm audit 0 vulnerability, pip check sạch và diff check pass.\n\nTrạng thái bằng chứng ngày 2026-08-11: Node `34/34`, toàn bộ Python `166/166`,
 integration `14/14`, acceptance `ok: true` và `git diff --check` exit `0`.
 Production Admin Web đã đăng nhập thành công trên loopback; Tổng quan, Allowlist,
 Hội thoại và Hệ thống/Hoạt động đã được đọc trực tiếp. Chỉ đánh dấu `[x]` cho
@@ -43,6 +43,14 @@ mục đã có bằng chứng tự động hoặc runtime; các thao tác mutati
 - [x] Quét HTML/JavaScript, mọi JSON response, log gần nhất và `tool_activity`; không mục nào chứa token, cookie, password, bridge token hoặc API key.
 - [ ] Non-admin không dùng `zalo_admin` và không ghi memory qua file/terminal/execute-code.
 - [ ] SQLite/media/session còn nguyên sau restart; event đã lưu không replay Hermes.
+- [ ] Follow-up chỉ nhận DM của đúng target sau `initial_sent_at`; message group không hoàn thành follow-up DM.
+- [ ] Target ngoài `allowed_users` bị từ chối trước khi tạo record hoặc gửi DM; non-admin bị chặn cả năm action `zalo_admin` follow-up.
+- [ ] Ticker chỉ chạy khi bridge/Zalo ready; bridge down giữ deadline bền vững trong SQLite.
+- [ ] Mỗi target quá hạn nhận tối đa một reminder tự động; claim/gửi bị ngắt giữa chừng thành `unknown`, không duplicate outbound sau restart.
+- [ ] Report chỉ gửi DM của admin tạo yêu cầu, chứa các nhãn `Có`, `Không`, `Đã phản hồi khác`, `Chưa phản hồi`, `gửi lỗi`, `không rõ kết quả`, rồi chuyển `awaiting_admin`.
+- [ ] Admin khác có thể xem/gia hạn/nhắc thủ công/đóng; member không thể xem hoặc sửa follow-up.
+- [ ] Phản hồi muộn sau reminder/report cập nhật target một lần; event duplicate và follow-up đã đóng không được ghép.
+- [ ] Purge message không xóa follow-up còn mở; xóa message response chỉ làm `response_message_id` thành `NULL`.
 - [x] `python scripts/acceptance.py --static --json` xác nhận continuity, manifest và checksum migration.
 - [x] Mở phiên Codex mới và xác nhận agent đọc `AGENTS.md`, kiến trúc, database, manifest và checkpoint trước khi sửa.
 - [x] `npm test`, `pytest`, integration, security smoke và `git diff --check` đều pass.

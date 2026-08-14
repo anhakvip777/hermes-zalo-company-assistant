@@ -818,6 +818,12 @@ ZALO_ADMIN_SCHEMA = {
         "admin_users": {"type": "array", "items": {"type": "string"}},
         "allowed_groups": {"type": "array", "items": {"type": "string"}},
         "fingerprint": {"type": "string"},
+        "title": {"type": "string"},
+        "question": {"type": "string"},
+        "targets": {"type": "array", "items": {"type": "object"}},
+        "due_at": {"type": "string"},
+        "follow_up_id": {"type": "integer"},
+        "target_ids": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["action"],
 }
