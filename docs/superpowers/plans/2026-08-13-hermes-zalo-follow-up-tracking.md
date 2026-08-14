@@ -12,7 +12,7 @@
 
 ## Checkpoint phiên làm việc
 
-- Spec chuẩn: docs/superpowers/specs/2026-08-13-hermes-zalo-follow-up-tracking-design.md, được duyệt triển khai; source hiện tại ở commit 45c48d59 trên branch company-assistant-v1.
+- Spec chuẩn: docs/superpowers/specs/2026-08-13-hermes-zalo-follow-up-tracking-design.md, được duyệt triển khai; baseline ở commit 45c48d59 và implementation đã commit tại b2882a8 trên branch company-assistant-v1.
 - Kiến trúc bất biến: Node bridge và Python adapter là hai process duy nhất; ticker nằm trong ZaloAdapter, không tạo cron/service/process mới. SQLite là nguồn sự thật, không dùng Hermes cron, terminal, prompt hay file JSON làm state follow-up.
 - Migration bất biến: hermes-plugin/migrations/001_initial.sql SHA-256 1bc42abea11f4480d7a513cb4ddd2ee9d6986d1449d5a939aed14e59c161e42a; mọi schema mới chỉ nằm trong 002_follow_up_tracking.sql.
 - Policy khóa: chỉ DM của đúng target_id sau initial_sent_at mới hoàn thành target; group không bao giờ hoàn thành follow-up DM. Reminder tự động đúng một lần; report chỉ gửi DM của owner_id; sau report trạng thái là awaiting_admin.
@@ -21,7 +21,7 @@
 - Task 1 evidence: test migration/claim/recovery đỏ trước production code; sau đó `tests/python/test_history_store.py` đạt `31 passed`, gồm purge response giữ outcome. Migration `002` và API persistence dùng transaction/claim có điều kiện.
 - Task 2–5 evidence: FollowUpService, one-time reminder/report, recovery, adapter ticker/store-first, `zalo_admin` admin boundary và integration DM/group đều đã triển khai; targeted Python/integration suite đạt `208 passed`, sau regression cuối toàn bộ Python đạt `250 passed`.
 - Verification mới nhất: Node `67/67 PASS`; Python `250 passed`; full acceptance `ok: true`; `npm audit --omit=dev` báo `0 vulnerabilities`; `python -m pip check` sạch; checksum `001_initial.sql` đúng `1bc42abea11f4480d7a513cb4ddd2ee9d6986d1449d5a939aed14e59c161e42a`; `npm pack --dry-run --json` có `hermes-plugin/follow_up.py` và migration `002`; `git diff --check` exit `0`.
-- Việc tiếp theo: đánh dấu các bước kế hoạch đã hoàn tất, chạy lại verification sau checkpoint, rồi commit thay đổi. Chưa push/tag nếu người dùng chưa yêu cầu.
+- Commit checkpoint: b2882a8 (`feat: add durable Zalo follow-up workflow`), đã chứa toàn bộ 17 file trong manifest. Sau commit, `git status --short` sạch; chỉ còn quyết định push/tag khi người dùng yêu cầu.
 
 ## Bản đồ file
 
@@ -223,7 +223,7 @@ Run: python -m pytest -q tests/python/test_history_store.py
 
 Expected: PASS, gồm test migration mới và recovery claim.
 
-- [ ] **Bước 9: Commit checkpoint persistence**
+- [x] **Bước 9: Commit checkpoint persistence (gộp vào b2882a8)**
 
 ~~~powershell
 git add hermes-plugin/migrations/002_follow_up_tracking.sql hermes-plugin/history_store.py tests/python/test_history_store.py
@@ -339,7 +339,7 @@ Run: python -m pytest -q tests/python/test_follow_up.py
 
 Expected: PASS cho allowed target, DM/group, before/after send và response yes/no/other.
 
-- [ ] **Bước 9: Commit state machine**
+- [x] **Bước 9: Commit state machine (gộp vào b2882a8)**
 
 ~~~powershell
 git add hermes-plugin/follow_up.py tests/python/test_follow_up.py
@@ -443,7 +443,7 @@ Run: python -m pytest -q tests/python/test_follow_up.py tests/integration/test_r
 
 Expected: PASS, gồm response late, manual extend/remind, close, timeout và recovery.
 
-- [ ] **Bước 8: Commit reminder/report/recovery**
+- [x] **Bước 8: Commit reminder/report/recovery (gộp vào b2882a8)**
 
 ~~~powershell
 git add hermes-plugin/follow_up.py hermes-plugin/history_store.py tests/python/test_follow_up.py tests/integration/test_restart.py
@@ -542,7 +542,7 @@ Run: python -m pytest -q tests/python/test_adapter.py
 
 Expected: PASS cho DM/group gate, outbound store-first và ticker lifecycle.
 
-- [ ] **Bước 9: Commit adapter integration**
+- [x] **Bước 9: Commit adapter integration (gộp vào b2882a8)**
 
 ~~~powershell
 git add hermes-plugin/adapter.py tests/python/test_adapter.py
@@ -665,7 +665,7 @@ python -m pytest -q tests/python/test_tooling.py tests/integration/test_company_
 
 Expected: test đầu thất bại trước wiring, sau đó targeted suite PASS.
 
-- [ ] **Bước 7: Commit quyền/integration**
+- [x] **Bước 7: Commit quyền/integration (gộp vào b2882a8)**
 
 ~~~powershell
 git add hermes-plugin/admin.py hermes-plugin/tooling.py tests/python/test_tooling.py tests/integration/test_company_assistant_flow.py
@@ -712,7 +712,7 @@ Expected: Node/Python/integration PASS; full acceptance ok: true; audit 0 vulner
 
 Thay bullet Việc tiếp theo ở đầu plan này bằng số test pass/fail thực tế, kết quả exact của acceptance/audit/pip/checksum và next action. Không ghi token, cookie, QR, Zalo ID runtime hoặc output chứa secret.
 
-- [ ] **Bước 5: Commit documentation/checkpoint**
+- [x] **Bước 5: Commit documentation/checkpoint (gộp vào b2882a8)**
 
 ~~~powershell
 git add docs/architecture/system-overview.md docs/architecture/database-schema.md docs/operations/acceptance-checklist.md docs/architecture/file-manifest.md docs/superpowers/specs/2026-08-13-hermes-zalo-follow-up-tracking-design.md docs/superpowers/plans/2026-08-13-hermes-zalo-follow-up-tracking.md
