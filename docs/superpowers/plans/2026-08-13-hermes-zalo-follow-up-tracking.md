@@ -22,6 +22,10 @@
 - Task 2–5 evidence: FollowUpService, one-time reminder/report, recovery, adapter ticker/store-first, `zalo_admin` admin boundary và integration DM/group đều đã triển khai; targeted Python/integration suite đạt `208 passed`, sau regression cuối toàn bộ Python đạt `250 passed`.
 - Verification mới nhất: Node `67/67 PASS`; Python `250 passed`; full acceptance `ok: true`; `npm audit --omit=dev` báo `0 vulnerabilities`; `python -m pip check` sạch; checksum `001_initial.sql` đúng `1bc42abea11f4480d7a513cb4ddd2ee9d6986d1449d5a939aed14e59c161e42a`; `npm pack --dry-run --json` có `hermes-plugin/follow_up.py` và migration `002`; `git diff --check` exit `0`.
 - Commit checkpoint: b2882a8 (`feat: add durable Zalo follow-up workflow`), đã chứa toàn bộ 17 file trong manifest. Sau commit, `git status --short` sạch; chỉ còn quyết định push/tag khi người dùng yêu cầu.
+- Triển khai VPS ngày 2026-08-18: source `/home/anhakvip777/ai-agents/hermes-zalo-company-assistant` đã fast-forward từ `c6c1e92` lên `fa7970e`; plugin cài trong profile `zalo-company` giống byte với `hermes-plugin/` của source. Backup trước triển khai nằm tại `runtime-backups/deploy-follow-up-20260818T001409Z`, gồm plugin, config, profile env, credential runtime và bản sao SQLite có `PRAGMA integrity_check=ok`.
+- Trạng thái hậu triển khai: `com.hermes.zaloplugin.service`, `hermes-gateway-zalo-company.service` và `cloudflared-hermes-zalo.service` đều `active` + `enabled`; user linger bật. Bridge trả `ok=true`, `loggedIn=true`, catalog có 142 method và có kết nối TCP SSE `ESTAB` với gateway. Admin Web cùng hai asset CSS/JS đều trả HTTP 200.
+- Database hậu triển khai: `conversations.sqlite3` có `integrity_check=ok`; hai bảng `follow_ups` và `follow_up_targets` đã được migration `002` tạo; checksum migration `001` vẫn đúng giá trị khóa. Chưa tạo follow-up thật nên cả hai bảng mới có 0 dòng.
+- Việc tiếp theo: admin thực hiện một follow-up thử với người nhận allowlist và thời hạn ngắn để xác nhận outbound, ghép DM, reminder một lần và report owner trên tài khoản Zalo thật; không cần thay đổi thêm kiến trúc, schema hoặc service.
 
 ## Bản đồ file
 
